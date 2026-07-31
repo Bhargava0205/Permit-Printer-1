@@ -95,6 +95,7 @@ class EscPosPrinter {
      * Moderate print density. Maximum density makes ink spread into
      * neighbouring dots, which is what breaks dense QR codes.
      */
+    @Suppress("unused")
     fun setNormalDensity() {
         try {
             write(byteArrayOf(0x1D, 0x28, 0x4B, 0x02, 0x00, 0x31, 0x00))  // level 0 = normal
@@ -141,7 +142,8 @@ class EscPosPrinter {
     }
 
     fun printBitmap(source: Bitmap, widthDots: Int = WIDTH_58MM) {
-        setNormalDensity()
+        write(byteArrayOf(0x1B, 0x40))     // ESC @ : full reset before each job
+        Thread.sleep(120)
         feedLines(1)                       // clean paper above the QR
         val target = if (widthDots >= 512) 576 else 384        // must be /8
         val prepared: Bitmap = when {
@@ -159,8 +161,8 @@ class EscPosPrinter {
         val mono = thresholdToMono(prepared)
         if (prepared !== source) prepared.recycle()
 
-        val chunkRows = 128
-        var row = 0
+        val chunkRows = 48                 // small blocks: cheap printers have
+        var row = 0                        // tiny buffers and drop data silently
         while (row < h) {
             val rows = if (row + chunkRows <= h) chunkRows else h - row
             val header = byteArrayOf(
@@ -174,9 +176,12 @@ class EscPosPrinter {
             System.arraycopy(mono, row * bytesPerRow, data, 0, data.size)
             write(header)
             write(data)
-            Thread.sleep(60)                       // let slow printers drain
+            out?.flush()
+            // give the head time to actually print this block before sending more
+            Thread.sleep(28L * rows / 8 + 40L)
             row += rows
         }
+        Thread.sleep(150)
     }
 
     /** Centres a narrower image on white paper - no scaling, no blur. */

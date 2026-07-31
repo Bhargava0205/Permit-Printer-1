@@ -1,5 +1,5 @@
 {
-  "version": "1.9",
+  "version": "2.0",
   "url": "https://github.com/Bhargava0205/Permit-Printer-1/releases/latest",
-  "notes": "The QR is now printed as the exact pixels stored in the permit PDF, simply enlarged by a whole number of printer dots - nothing is redrawn or interpreted."
+  "notes": "Fixes receipts after the first one printing badly: the printer is reset and reconnected for every job, data is sent in smaller blocks with pauses so nothing is dropped, and the heat/density commands that upset some printers were removed."
 }

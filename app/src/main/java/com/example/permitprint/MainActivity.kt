@@ -31,7 +31,7 @@ class MainActivity : Activity() {
 
     companion object {
         /** Shown in the app and compared against version.json for updates. */
-        const val APP_VERSION = "1.9"
+        const val APP_VERSION = "2.0"
         /** Edit version.json in the repo to publish an update to every phone. */
         const val VERSION_URL =
             "https://raw.githubusercontent.com/Bhargava0205/Permit-Printer-1/main/version.json"
@@ -146,8 +146,12 @@ class MainActivity : Activity() {
             }
             Thread {
                 try {
-                    if (!printer.isConnected) connectSaved()
+                    printer.disconnect()
+                    Thread.sleep(150)
+                    connectSaved()
                     printer.testPage(prefs.getString("name", "printer") ?: "printer")
+                    Thread.sleep(200)
+                    printer.disconnect()
                     status("Test page sent \u2714", true)
                 } catch (e: Exception) {
                     status("Test print failed: " + e.message, false)
@@ -172,11 +176,16 @@ class MainActivity : Activity() {
             }
             Thread {
                 try {
-                    if (!printer.isConnected) connectSaved()
+                    printer.disconnect()          // always start from a clean link
+                    Thread.sleep(150)
+                    connectSaved()
                     printer.printBitmap(bmp, widthDots)
                     printer.feedLines(4)
+                    Thread.sleep(200)
+                    printer.disconnect()
                     status("Printed \u2714", true)
                 } catch (e: Exception) {
+                    try { printer.disconnect() } catch (_: Exception) {}
                     status("Print failed: " + e.message, false)
                     runOnUiThread { choosePrinter() }
                 }
