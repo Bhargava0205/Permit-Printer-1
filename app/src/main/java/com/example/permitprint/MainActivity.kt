@@ -31,7 +31,7 @@ class MainActivity : Activity() {
 
     companion object {
         /** Shown in the app and compared against version.json for updates. */
-        const val APP_VERSION = "1.2"
+        const val APP_VERSION = "1.3"
         /** Edit version.json in the repo to publish an update to every phone. */
         const val VERSION_URL =
             "https://raw.githubusercontent.com/Bhargava0205/Permit-Printer-1/main/version.json"
@@ -127,6 +127,10 @@ class MainActivity : Activity() {
 
         @JavascriptInterface
         fun checkUpdateNow() { checkForUpdate(true) }
+
+        /** Fallback used if the page calls print() without a paper width. */
+        @JavascriptInterface
+        fun print(dataUrl: String) = print(dataUrl, EscPosPrinter.WIDTH_58MM)
 
         @JavascriptInterface
         fun print(dataUrl: String, widthDots: Int) {

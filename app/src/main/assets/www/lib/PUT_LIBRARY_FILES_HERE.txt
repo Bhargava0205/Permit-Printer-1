@@ -1,0 +1,24 @@
+OFFLINE LIBRARIES  (optional but strongly recommended)
+======================================================
+Put these THREE files in this folder so the app works with no internet:
+
+  pdf.min.js
+  pdf.worker.min.js
+  jsQR.min.js
+
+How to get them (2 minutes, on any computer with internet):
+
+1. Open each link below in a browser tab:
+     https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js
+     https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js
+     https://cdnjs.cloudflare.com/ajax/libs/jsqr/1.4.0/jsQR.min.js
+2. On each page press Cmd+S (Mac) or Ctrl+S (Windows) and save the file.
+3. Make sure the saved names are exactly:
+     pdf.min.js , pdf.worker.min.js , jsQR.min.js
+4. Copy all three into this lib folder, then commit and push.
+
+If these files are missing the app still works, but the FIRST launch on each
+phone needs internet (afterwards Android caches them).
+
+NOTE: OCR for photographs always needs internet the first time - that engine
+is ~11MB and is downloaded only when a photo is used.

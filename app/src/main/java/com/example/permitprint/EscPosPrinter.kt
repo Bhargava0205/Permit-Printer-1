@@ -105,7 +105,7 @@ class EscPosPrinter {
      * happens at all - which is what keeps the QR perfectly sharp.
      */
     @JvmOverloads
-    fun printBitmap(source: Bitmap, widthDots: Int = PRINTER_WIDTH_DOTS) {
+    fun printBitmap(source: Bitmap, widthDots: Int = WIDTH_58MM) {
         val target = if (widthDots >= 512) 576 else 384        // must be /8
         val prepared: Bitmap = when {
             source.width == target -> source
