@@ -108,6 +108,11 @@ class MainActivity : Activity() {
             val b64 = dataUrl.substringAfter("base64,")
             val bytes = Base64.decode(b64, Base64.DEFAULT)
             val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            if (!hasBtPermission()) {
+                runOnUiThread { requestBtPermissions() }
+                status("Allow the Bluetooth permission, then tap Print again.", false)
+                return
+            }
             Thread {
                 try {
                     if (!printer.isConnected) connectSaved()
@@ -123,10 +128,13 @@ class MainActivity : Activity() {
     }
 
     @SuppressLint("MissingPermission")
+    @Throws(Exception::class)
     private fun bondedDevices(): List<BluetoothDevice> {
         val manager = getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
         val adapter: BluetoothAdapter? = manager?.adapter
-        val bonded = adapter?.bondedDevices ?: return emptyList()
+        if (adapter == null) throw Exception("this phone has no Bluetooth")
+        if (!adapter.isEnabled) throw Exception("switch Bluetooth on, then tap Print again")
+        val bonded = adapter.bondedDevices ?: return emptyList()
         return bonded.toList()
     }
 
@@ -150,7 +158,7 @@ class MainActivity : Activity() {
 
     @SuppressLint("MissingPermission")
     private fun choosePrinter() {
-        val devices = bondedDevices()
+        val devices = try { bondedDevices() } catch (e: Exception) { emptyList() }
         if (devices.isEmpty()) return
         val names = devices.map { (it.name ?: "Unknown") + " (" + it.address + ")" }.toTypedArray()
         AlertDialog.Builder(this)
@@ -161,6 +169,13 @@ class MainActivity : Activity() {
                 status("Printer saved. Tap Print again.", true)
             }
             .show()
+    }
+
+    private fun hasBtPermission(): Boolean {
+        return if (Build.VERSION.SDK_INT >= 31)
+            checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) ==
+                PackageManager.PERMISSION_GRANTED
+        else true
     }
 
     private fun requestBtPermissions() {

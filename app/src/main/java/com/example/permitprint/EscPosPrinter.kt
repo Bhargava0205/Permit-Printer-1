@@ -6,19 +6,22 @@ import android.bluetooth.BluetoothSocket
 import android.graphics.Bitmap
 import android.graphics.Color
 import java.io.OutputStream
+import java.lang.reflect.Method
 import java.util.UUID
 
 /**
- * Minimal ESC/POS driver for 58mm Bluetooth thermal printers.
+ * ESC/POS driver for 58mm Bluetooth thermal printers.
  *
- * 58mm printers have a printable width of 48mm = 384 dots at 203 dpi.
- * Images are sent with the GS v 0 raster command in chunks so cheap
- * printers with tiny buffers don't drop data.
+ * QR-CRITICAL RULES FOLLOWED HERE:
+ *  - never smooth/blur when resizing (nearest-neighbour only, and only if
+ *    absolutely unavoidable; normally the image is already 384 dots wide)
+ *  - never dither: the receipt is pure black/white, so a hard threshold keeps
+ *    every QR module a perfect square. Dithering was what smeared the QR.
  */
 class EscPosPrinter {
 
     companion object {
-        const val PRINTER_WIDTH_DOTS = 384          // 58mm printer
+        const val PRINTER_WIDTH_DOTS = 384          // 58mm = 48mm printable
         private val SPP_UUID: UUID =
             UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
     }
@@ -29,15 +32,45 @@ class EscPosPrinter {
     val isConnected: Boolean
         get() = socket?.isConnected == true
 
+    /** Connects, with fallbacks for the many quirky clone printers. */
     @SuppressLint("MissingPermission")
     fun connect(device: BluetoothDevice) {
         disconnect()
-        val s = device.createRfcommSocketToServiceRecord(SPP_UUID)
-        s.connect()
+        var lastError: Exception? = null
+
+        // 1) standard secure SPP
+        try {
+            val s = device.createRfcommSocketToServiceRecord(SPP_UUID)
+            s.connect()
+            attach(s); return
+        } catch (e: Exception) { lastError = e; }
+
+        // 2) insecure SPP (many cheap printers have no pairing security)
+        try {
+            val s = device.createInsecureRfcommSocketToServiceRecord(SPP_UUID)
+            s.connect()
+            attach(s); return
+        } catch (e: Exception) { lastError = e }
+
+        // 3) hidden channel-1 fallback (older/no-SDP printers)
+        try {
+            val m: Method = device.javaClass
+                .getMethod("createRfcommSocket", Int::class.javaPrimitiveType)
+            val s = m.invoke(device, 1) as BluetoothSocket
+            s.connect()
+            attach(s); return
+        } catch (e: Exception) { lastError = e }
+
+        throw Exception(
+            "could not connect (" + (lastError?.message ?: "unknown") +
+            "). Switch the printer off and on, then try again."
+        )
+    }
+
+    private fun attach(s: BluetoothSocket) {
         socket = s
         out = s.outputStream
-        // Initialize printer: ESC @
-        write(byteArrayOf(0x1B, 0x40))
+        write(byteArrayOf(0x1B, 0x40))          // ESC @  initialise
     }
 
     fun disconnect() {
@@ -48,38 +81,46 @@ class EscPosPrinter {
     }
 
     private fun write(bytes: ByteArray) {
-        out?.write(bytes)
-        out?.flush()
+        val o = out ?: throw Exception("printer not connected")
+        o.write(bytes)
+        o.flush()
     }
 
     fun feedLines(n: Int) {
-        write(byteArrayOf(0x1B, 0x64, n.toByte()))   // ESC d n
+        write(byteArrayOf(0x1B, 0x64, n.toByte()))
     }
 
-    /**
-     * Prints a bitmap. The bitmap is scaled to 384px wide (aspect kept),
-     * converted to 1-bit using Floyd–Steinberg dithering, and streamed
-     * in 128-row chunks.
-     */
+    /** Sets maximum print density so QR modules come out solid black. */
+    fun setMaxDensity() {
+        try {
+            // GS ( K  <density>  (supported by most clones; ignored by others)
+            write(byteArrayOf(0x1D, 0x28, 0x4B, 0x02, 0x00, 0x31, 0x08))
+        } catch (_: Exception) { }
+    }
+
     fun printBitmap(source: Bitmap) {
-        val scaled = if (source.width != PRINTER_WIDTH_DOTS) {
-            val h = (source.height.toLong() * PRINTER_WIDTH_DOTS / source.width).toInt()
-            Bitmap.createScaledBitmap(source, PRINTER_WIDTH_DOTS, h, true)
-        } else source
+        // Fit to the printer width WITHOUT smoothing.
+        val prepared: Bitmap = when {
+            source.width == PRINTER_WIDTH_DOTS -> source
+            source.width < PRINTER_WIDTH_DOTS -> padToWidth(source)
+            else -> {
+                val h = (source.height.toLong() * PRINTER_WIDTH_DOTS / source.width).toInt()
+                Bitmap.createScaledBitmap(source, PRINTER_WIDTH_DOTS, h, false) // no filter
+            }
+        }
 
-        val w = scaled.width
-        val h = scaled.height
+        val w = prepared.width
+        val h = prepared.height
         val bytesPerRow = w / 8
-
-        val mono = ditherToMono(scaled)
-        if (scaled !== source) scaled.recycle()
+        val mono = thresholdToMono(prepared)
+        if (prepared !== source) prepared.recycle()
 
         val chunkRows = 128
         var row = 0
         while (row < h) {
-            val rows = minOf(chunkRows, h - row)
+            val rows = if (row + chunkRows <= h) chunkRows else h - row
             val header = byteArrayOf(
-                0x1D, 0x76, 0x30, 0x00,                         // GS v 0, normal mode
+                0x1D, 0x76, 0x30, 0x00,
                 (bytesPerRow and 0xFF).toByte(),
                 ((bytesPerRow shr 8) and 0xFF).toByte(),
                 (rows and 0xFF).toByte(),
@@ -89,54 +130,45 @@ class EscPosPrinter {
             System.arraycopy(mono, row * bytesPerRow, data, 0, data.size)
             write(header)
             write(data)
-            // Give slow printers time to drain their buffer
-            Thread.sleep(60)
+            Thread.sleep(60)                       // let slow printers drain
             row += rows
         }
     }
 
+    /** Centres a narrower image on white paper - no scaling, no blur. */
+    private fun padToWidth(src: Bitmap): Bitmap {
+        val outBmp = Bitmap.createBitmap(PRINTER_WIDTH_DOTS, src.height, Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(outBmp)
+        canvas.drawColor(Color.WHITE)
+        canvas.drawBitmap(src, ((PRINTER_WIDTH_DOTS - src.width) / 2).toFloat(), 0f, null)
+        return outBmp
+    }
+
     /**
-     * Floyd–Steinberg dithering -> packed 1-bit array, MSB first,
-     * 1 = black dot (ESC/POS raster convention).
+     * Hard threshold -> packed 1-bit rows (MSB first, 1 = black dot).
+     * No dithering: keeps QR modules perfectly square and scannable.
      */
-    private fun ditherToMono(bmp: Bitmap): ByteArray {
+    private fun thresholdToMono(bmp: Bitmap): ByteArray {
         val w = bmp.width
         val h = bmp.height
         val pixels = IntArray(w * h)
         bmp.getPixels(pixels, 0, w, 0, 0, w, h)
 
-        // Grayscale with white background for transparency
-        val gray = FloatArray(w * h)
-        for (i in pixels.indices) {
-            val c = pixels[i]
-            val a = Color.alpha(c) / 255f
-            val r = Color.red(c) * a + 255 * (1 - a)
-            val g = Color.green(c) * a + 255 * (1 - a)
-            val b = Color.blue(c) * a + 255 * (1 - a)
-            gray[i] = 0.299f * r + 0.587f * g + 0.114f * b
-        }
-
         val bytesPerRow = w / 8
         val outBytes = ByteArray(bytesPerRow * h)
 
         for (y in 0 until h) {
+            val rowBase = y * bytesPerRow
             for (x in 0 until w) {
-                val i = y * w + x
-                val old = gray[i]
-                val newVal = if (old < 128f) 0f else 255f
-                val err = old - newVal
-                gray[i] = newVal
-
-                if (x + 1 < w) gray[i + 1] += err * 7 / 16
-                if (y + 1 < h) {
-                    if (x > 0) gray[i + w - 1] += err * 3 / 16
-                    gray[i + w] += err * 5 / 16
-                    if (x + 1 < w) gray[i + w + 1] += err * 1 / 16
-                }
-
-                if (newVal == 0f) { // black
-                    outBytes[y * bytesPerRow + x / 8] =
-                        (outBytes[y * bytesPerRow + x / 8].toInt() or (0x80 shr (x % 8))).toByte()
+                val c = pixels[y * w + x]
+                val a = Color.alpha(c) / 255f
+                val r = Color.red(c) * a + 255 * (1 - a)
+                val g = Color.green(c) * a + 255 * (1 - a)
+                val b = Color.blue(c) * a + 255 * (1 - a)
+                val lum = 0.299f * r + 0.587f * g + 0.114f * b
+                if (lum < 160f) {                   // slightly generous = solid black
+                    val idx = rowBase + (x shr 3)
+                    outBytes[idx] = (outBytes[idx].toInt() or (0x80 shr (x and 7))).toByte()
                 }
             }
         }
