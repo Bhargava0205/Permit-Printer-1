@@ -1,0 +1,706 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AP Permit → 58mm Print</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.png">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsqr/1.4.0/jsQR.min.js"></script>
+<script>if (typeof jsQR === "undefined") document.write('<script src="https://unpkg.com/jsqr@1.4.0/dist/jsQR.js"><\/script>');</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/5.1.0/tesseract.min.js"></script>
+<style>
+  :root{--green:#1b6b3a;--green-dark:#124a28;--paper:#f6f5f1;--ink:#1c1c1c;--line:#d8d5cc}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--paper);
+    color:var(--ink);min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:16px}
+  header{width:100%;max-width:430px;margin-bottom:14px}
+  .brand{display:flex;align-items:center;gap:10px}
+  .brand .mark{width:38px;height:38px;border-radius:8px;background:var(--green);color:#fff;
+    display:flex;align-items:center;justify-content:center;font-weight:800;font-size:18px}
+  h1{font-size:18px;font-weight:700}
+  .sub{font-size:12.5px;color:#5c5a54;margin-top:2px}
+  main{width:100%;max-width:430px;display:flex;flex-direction:column;gap:12px}
+  .btn{width:100%;padding:16px;border:none;border-radius:10px;font-size:17px;font-weight:700;cursor:pointer}
+  .btn:active{transform:translateY(1px)}
+  .btn-pick{background:var(--green);color:#fff}
+  .btn-print{background:var(--ink);color:#fff;display:none}
+  .row{display:none;gap:10px}
+  .row .btn{font-size:14px;font-weight:600;padding:12px;background:#fff;border:1.5px solid var(--line);color:var(--ink)}
+  #status{font-size:13.5px;padding:10px 12px;border-radius:8px;background:#fff;border:1.5px solid var(--line);display:none}
+  #status.err{border-color:#c04a3a;color:#8c2f22;background:#fdf1ef}
+  #status.ok{border-color:var(--green);color:var(--green-dark);background:#eef6f0}
+  .badge{display:inline-block;padding:2px 8px;border-radius:20px;background:var(--green);color:#fff;
+    font-size:11px;font-weight:700;margin-right:6px;vertical-align:1px}
+  .preview-wrap{display:none;background:#e4e2da;border-radius:12px;padding:18px 0;justify-content:center}
+  #receipt{width:232px;image-rendering:pixelated;box-shadow:0 6px 24px rgba(0,0,0,.25);background:#fff}
+  footer{margin-top:auto;padding-top:18px;font-size:11.5px;color:#8b887f;text-align:center;max-width:430px}
+  input[type=file]{display:none}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <div class="mark">58</div>
+    <div>
+      <h1>AP Permit → Thermal Print</h1>
+      <div class="sub">e-Transport Permit • Market Yard & Check Post • 58mm</div>
+    </div>
+  </div>
+</header>
+
+<main>
+  <div style="display:flex;gap:8px">
+    <button class="btn" id="p58" style="flex:1;font-size:13px;padding:9px;background:#1b6b3a;color:#fff">58mm (mobile)</button>
+    <button class="btn" id="p80" style="flex:1;font-size:13px;padding:9px;background:#fff;border:1.5px solid var(--line);color:var(--ink)">80mm (Epson TM-T82)</button>
+  </div>
+  <button class="btn btn-pick" id="pickBtn">📄 Select Permit PDF</button>
+  <input type="file" id="file" accept="application/pdf,image/*">
+  <div id="status"></div>
+  <div class="preview-wrap" id="previewWrap"><canvas id="receipt" width="384"></canvas></div>
+  <button class="btn btn-print" id="printBtn">🖨️ Print</button>
+  <div class="row" id="altRow">
+    <button class="btn" id="sysBtn">System Print (PC)</button>
+    <button class="btn" id="shareBtn">Share to print app</button>
+    <button class="btn" id="dlBtn">Download image</button>
+  </div>
+</main>
+
+<footer>Prints a convenience copy with the original scannable QR.
+The PDF on your phone remains the official permit.</footer>
+
+<script>
+pdfjsLib.GlobalWorkerOptions.workerSrc =
+  "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+
+const $ = id => document.getElementById(id);
+function setStatus(html, cls){ const s=$("status"); s.innerHTML=html; s.className=cls||""; s.style.display="block"; }
+const clean = s => s ? s.trim().replace(/\s+/g," ") : "-";
+const num = s => parseFloat(String(s).replace(/,/g,"")) || 0;
+
+let paperDots = (localStorage.getItem("paperDots")|0) || 384;
+let lastPermit = null;
+function paintPaperBtns(){
+  const on = {background:"#1b6b3a",color:"#fff",border:"none"};
+  const off = {background:"#fff",color:"#1c1c1c",border:"1.5px solid #d8d5cc"};
+  const a = paperDots===384 ? on : off, b = paperDots===384 ? off : on;
+  Object.assign($("p58").style, a); Object.assign($("p80").style, b);
+  $("receipt").style.width = paperDots===384 ? "232px" : "330px";
+}
+function setPaper(d){
+  paperDots = d;
+  try{ localStorage.setItem("paperDots", d); }catch(e){}
+  paintPaperBtns();
+  if(lastPermit) drawReceipt(lastPermit);
+}
+window.appStatus = (msg, ok) => setStatus(msg, ok ? "ok" : "err");
+$("p58").onclick = () => setPaper(384);
+$("p80").onclick = () => setPaper(576);
+paintPaperBtns();
+
+let _shareBuf = "";
+window.shareBegin = () => { _shareBuf = ""; };
+window.shareChunk = s => { _shareBuf += s; };
+window.shareEnd = (mime, name) => {
+  const bin = atob(_shareBuf); _shareBuf = "";
+  const a = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i);
+  handlePdf(new File([a], name || "permit", {type: mime || "application/pdf"}));
+};
+
+$("pickBtn").onclick = () => $("file").click();
+$("file").onchange = e => { if(e.target.files[0]) handlePdf(e.target.files[0]); };
+
+// PWA: service worker + auto-open shared PDFs
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("sw.js");
+  if (new URLSearchParams(location.search).get("shared") === "1") {
+    caches.open("shared-pdf").then(c=>c.match("shared.pdf")).then(r=>r&&r.blob())
+      .then(b=>{ if(b) handlePdf(new File([b],"permit.pdf",{type:"application/pdf"})); }).catch(()=>{});
+  }
+}
+
+// ================= Permit intake: PDF or photo =================
+async function handlePdf(file){
+  try{
+    setStatus("Reading permit\u2026");
+    let text = "", big;
+    const isPdf = file.type === "application/pdf" || /\.pdf$/i.test(file.name||"");
+    if(isPdf){
+      const buf = await file.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument({data:buf}).promise;
+      const page = await pdf.getPage(1);
+      try{ text = (await page.getTextContent()).items.map(i=>i.str).join("\n"); }catch(e){}
+      const scale = 2000 / page.getViewport({scale:1}).width;
+      const vp = page.getViewport({scale});
+      big = document.createElement("canvas");
+      big.width = vp.width; big.height = vp.height;
+      const bctx = big.getContext("2d");
+      bctx.fillStyle="#fff"; bctx.fillRect(0,0,big.width,big.height);
+      await page.render({canvasContext: bctx, viewport: vp}).promise;
+    } else {
+      big = await imageToCanvas(file);
+    }
+
+    let ocrUsed = false;
+    if(text.replace(/\s/g,"").length < 80 && typeof Tesseract !== "undefined"){
+      try{
+        setStatus("Photo detected \u2014 reading text (OCR)\u2026 first time downloads ~11MB");
+        const r = await Tesseract.recognize(big, "eng", {logger: m => {
+          if(m.status === "recognizing text")
+            setStatus(`Reading photo\u2026 ${Math.round(m.progress*100)}%`);
+        }});
+        text = r.data.text || "";
+        ocrUsed = true;
+      }catch(e){ /* continue with QR-only data */ }
+    }
+
+    const q = await findQr(big);          // {canvas, data} or null
+
+    const pay = q && q.data ? payloadFields(q.data) : {};
+    const isCheckpost = /Check Post Information/i.test(text) ||
+      (!/Market Yard Information/i.test(text) &&
+       (pay.typeCode === "NTP" || !!pay.from));
+    const p = isCheckpost ? parseCheckpost(text||"") : parseMarketYard(text||"");
+    mergePayload(p, pay, isCheckpost);
+    if(ocrUsed){
+      if(pay.permitNo) p.permitNo = pay.permitNo;
+      if(pay.permitType) p.permitType = pay.permitType;
+      if(pay.mobile) p.partyMob = pay.mobile;
+      if(isCheckpost){
+        if(pay.from) p.from = pay.from;
+        if(pay.departure) p.departure = pay.departure;
+        if(pay.to) p.to = pay.to;
+        if(pay.arrival) p.arrival = pay.arrival;
+      }
+      p.ocr = true;
+    }
+    p.qr = q ? q.canvas : null;
+    p.kind = isCheckpost ? "checkpost" : "market";
+    lastPermit = p;
+    drawReceipt(p);
+
+    $("previewWrap").style.display="flex";
+    $("printBtn").style.display="block";
+    $("altRow").style.display="flex";
+    const badge = isCheckpost ? "CHECK POST" : "MARKET YARD";
+    let note = "";
+    if(!q) note = " \u26A0 QR not found \u2014 printed without QR.";
+    else if(q.canvas.verified) note = " QR verified \u2714";
+    else note = " \u26A0 Test scan the printout.";
+    let msg = `<span class="badge">${badge}</span>Permit ${p.permitNo} \u2014 ${p.partyName}.${note}`;
+    if(p.items.length>1) msg += ` (${p.items.length} commodities \u2014 please verify amounts)`;
+    if(ocrUsed) msg += " Details read from photo (OCR) \u2014 verify.";
+    setStatus(msg,"ok");
+  }catch(err){
+    setStatus("Could not read this file: "+err.message,"err");
+  }
+}
+
+async function imageToCanvas(file){
+  const url = URL.createObjectURL(file);
+  const img = await new Promise((res,rej)=>{
+    const im = new Image();
+    im.onload = ()=>res(im);
+    im.onerror = ()=>rej(new Error("cannot open this image"));
+    im.src = url;
+  });
+  const MAX = 2400;
+  const k = Math.min(1, MAX/Math.max(img.width,img.height));
+  const c = document.createElement("canvas");
+  c.width = Math.round(img.width*k);
+  c.height = Math.round(img.height*k);
+  const ctx = c.getContext("2d");
+  ctx.fillStyle="#fff"; ctx.fillRect(0,0,c.width,c.height);
+  ctx.drawImage(img,0,0,c.width,c.height);
+  URL.revokeObjectURL(url);
+  return c;
+}
+
+// Fields embedded inside the permit QR itself (works even for photos/scans)
+function payloadFields(d){
+  const get = k => {
+    const m = d.match(new RegExp(k+"\\s*:\\s*([\\s\\S]*?)(?=,[A-Za-z][A-Za-z ]*\\s*:|\\}|$)","i"));
+    return m ? clean(m[1]).replace(/[,\s]+$/,"") : "";
+  };
+  const splitPlace = v => {
+    const m = v.match(/^(.*?)\s*\((.*?)\)\s*$/);
+    return m ? {place: clean(m[1]), time: clean(m[2])} : {place: v, time: ""};
+  };
+  const typeCode = get("Permit Type");
+  const names = {NVTP:"Voluntary Trader Permit", NTP:"Non-Trader Permit",
+                 TP:"Trader Permit", VTP:"Voluntary Trader Permit"};
+  const tf = get("Trip From") ? splitPlace(get("Trip From")) : null;
+  const tt = get("Trip To") ? splitPlace(get("Trip To")) : null;
+  return {
+    permitNo: get("Permit No"),
+    typeCode,
+    permitType: names[typeCode] || typeCode,
+    mobile: get("Trader Mobile") || get("Seller Mobile") || get("Mobile"),
+    from: tf ? tf.place : "", departure: tf ? tf.time : "",
+    to: tt ? tt.place : "", arrival: tt ? tt.time : ""
+  };
+}
+
+function mergePayload(p, pay, isCheckpost){
+  const fill = (k,v)=>{ if((p[k]==="-"||p[k]===""||p[k]==null) && v) p[k]=v; };
+  fill("permitNo", pay.permitNo);
+  fill("permitType", pay.permitType);
+  fill("partyMob", pay.mobile);
+  if(isCheckpost){
+    fill("from", pay.from); fill("departure", pay.departure);
+    fill("to", pay.to); fill("arrival", pay.arrival);
+  }
+}
+
+// ================= Shared field extraction =================
+function commonFields(text){
+  const find=(re,d="-")=>{const m=text.match(re);return m?clean(m[1]):d;};
+  return {
+    permitNo: find(/\b(\d{8})\b/),
+    permitType: find(/\n\s*([A-Za-z][A-Za-z- ]*? Permit)\s*\n/i),
+    dateTime: find(/(\d{2}-\d{2}-\d{4} \d{2}:\d{2}:\d{2} [ap]m)/i),
+    amcName: find(/AMC Name\s*([\s\S]+?)\s*(?:Market Yard Name|Check Post Name)/i),
+    officer: find(/Officer Name\s*([\s\S]+?)\s*Officer Mobile No/i),
+    officerMob: find(/Officer Mobile No\s*[\s\S]*?(\d{10})/i),
+    generated: find(/Generated on\s*:\s*(\d{2}-\d{2}-\d{4} \d{2}:\d{2}:\d{2} [ap]m)/i),
+    find
+  };
+}
+
+// Multi-commodity: pairs money values row-wise vs column-wise,
+// keeps whichever pairing matches the permit's own TOTAL.
+function parseCommodities(text, feeWord){
+  const cb = text.match(/Commodity Details([\s\S]+?)TOTAL/i);
+  const b = cb ? cb[1] : "";
+  const labels = new Set(["s.no","commodity","trade value (inr)","quantity","unit",
+    "user charge (inr)","market fee (inr)","department of agricultural marketing"]);
+  const unitsSet = new Set(["QTL","KG","KGS","TON","TONS","BAG","BAGS","NOS"]);
+  const wm = new Set(["department","of","agricultural","marketing"]);
+  const isWm = t => { const ws=t.toLowerCase().split(/\s+/);
+    return ws.length>0 && ws.every(w=>wm.has(w)); };
+  const names = b.split("\n").map(l=>l.trim()).filter(l =>
+    l.length>1 && /^[A-Za-z][A-Za-z ]*$/.test(l) &&
+    !labels.has(l.toLowerCase()) && !unitsSet.has(l.toUpperCase()) && !isWm(l));
+  const money = [...b.matchAll(/([\d,]+\.\d{2})/g)].map(m=>m[1]);
+  let qtys  = [...b.matchAll(/\b(\d+\.\d)(?!\d)/g)].map(m=>m[1]);
+  if(!qtys.length) qtys = [...b.matchAll(/\n\s*(\d{2,6})\s*\n/g)].map(m=>m[1]);
+  const units = [...b.matchAll(/\b(QTL|KGS?|TONS?|BAGS?|NOS)\b/gi)].map(m=>m[1]);
+
+  let tm = text.match(/TOTAL\s*([\s\S]+?)\((ONLINE|CASH PAYMENT|CASH|UPI|DD|CHEQUE)\)/i);
+  if(!tm){ const t2 = text.match(/TOTAL\s*([\s\S]{0,400})/i); tm = t2 ? [t2[0],t2[1],""] : null; }
+  const tMoney = tm ? [...tm[1].matchAll(/([\d,]+\.\d{2})/g)].map(m=>m[1]) : [];
+  const totalTrade = tMoney[0] || "-";
+  const totalFee = (tMoney.length>1 ? tMoney[tMoney.length-1] : "-") +
+                   (tm && tm[2] ? ` (${tm[2].toUpperCase()})` : "");
+  const middles = tMoney.length>2 ? tMoney.slice(1,-1) : [];
+
+  const N = Math.max(names.length, 1);
+  let trades, fees;
+  if(N === 1 || money.length !== 2*N){
+    trades = money.slice(0,N); while(trades.length<N) trades.push("-");
+    fees = money.slice(N, 2*N);
+    if(fees.length < N && middles.length >= N - fees.length)
+      fees = fees.concat(middles.slice(0, N - fees.length));
+    while(fees.length<N) fees.push("-");
+  } else {
+    const row = {t: money.filter((_,i)=>i%2===0), f: money.filter((_,i)=>i%2===1)};
+    const col = {t: money.slice(0,N), f: money.slice(N)};
+    const sum = a => a.reduce((s,v)=>s+num(v),0);
+    const target = num(totalTrade);
+    const pick = Math.abs(sum(col.t)-target) <= Math.abs(sum(row.t)-target) ? col : row;
+    trades = pick.t; fees = pick.f;
+  }
+  const items = [];
+  for(let i=0;i<N;i++) items.push({
+    sNo: String(i+1),
+    name: names[i] || "-",
+    trade: trades[i] || "-",
+    qty: (qtys[i] || "-") + " " + (units[i] || units[0] || ""),
+    fee: fees[i] || "-",
+    feeWord
+  });
+  return {items, totalTrade, totalFee};
+}
+
+// ================= Market Yard permit =================
+function parseMarketYard(text){
+  const c = commonFields(text);
+  const tb = text.match(/Trader Information([\s\S]+?)Commodity Details/i);
+  const mob = tb && tb[1].match(/\b(\d{10})\b/);
+  return Object.assign(c, parseCommodities(text,"User Charge"), {
+    marketYard: c.find(/Market Yard Name\s*([\s\S]+?)\s*Officer Name/i),
+    partyLabel: "Trader Name",
+    partyName: c.find(/Trader Name\s*([\s\S]+?)\s*(?:Mobile No|Address)/i),
+    partyMob: mob ? mob[1] : "-",
+    address: c.find(/Address\s*([\s\S]+?)\s*(?:\b\d{10}\b|Commodity Details)/i),
+    transMob: (()=>{const t=text.match(/Transporter\s*\n?\s*(?:Information|Mobile)([\s\S]+)$/i);
+      const m=t&&t[1].match(/\b(\d{10})\b/);return m?m[1]:"-";})(),
+    vehicle: c.find(/Vehicle No\s*[\s\S]*?\b([A-Z]{2}\d{2}[A-Z]{1,2}\d{4})\b/)
+  });
+}
+
+// FROM/TO values may appear after both labels (column order) or after each label
+function tripFromTo(tt){
+  const adjacent = /FROM\s*\n?\s*TO\s*\n/i.test(tt);
+  if(adjacent){
+    const seg = tt.match(/TO\s*([\s\S]+?)\s*\d{2}-\d{2}-\d{4}/i);
+    const lines = seg ? seg[1].split("\n").map(s=>s.trim()).filter(Boolean) : [];
+    return {from: lines[0] || "-", to: clean(lines.slice(1).join(" ")) || "-"};
+  }
+  const f = tt.match(/FROM\s*([\s\S]+?)\s*\d{2}-\d{2}-\d{4}/i);
+  const t = tt.match(/TO\s*([\s\S]+?)\s*\d{2}-\d{2}-\d{4}/i);
+  return {from: clean(f?f[1]:"-").replace(/\s*TO$/i,""), to: clean(t?t[1]:"-")};
+}
+
+// ================= Check Post permit =================
+function parseCheckpost(text){
+  const c = commonFields(text);
+  const sb = text.match(/Seller Information([\s\S]+?)(?:Payment Information|Commodity Details)/i);
+  const mob = sb && sb[1].match(/\b(\d{10})\b/);
+  const dts = [...text.matchAll(/(\d{2}-\d{2}-\d{4} \d{2}:\d{2}:\d{2} [ap]m)/gi)].map(m=>m[1]);
+  const tripBlock = text.match(/TRIP DETAILS([\s\S]+)$/i);
+  const tt = tripBlock ? tripBlock[1] : "";
+  const tripDts = [...tt.matchAll(/(\d{2}-\d{2}-\d{4} \d{2}:\d{2}:\d{2} [ap]m)/gi)].map(m=>m[1]);
+  return Object.assign(c, parseCommodities(text,"Market Fee"), {
+    checkPost: c.find(/Check Post Name\s*([\s\S]+?)\s*Officer Name/i),
+    partyLabel: "Seller Name",
+    partyName: c.find(/Seller Name\s*([\s\S]+?)\s*(?:Mobile No|Address)/i),
+    partyMob: mob ? mob[1] : "-",
+    address: c.find(/Address\s*([\s\S]+?)\s*(?:Payment Information|\b\d{10}\b|Commodity Details)/i),
+    payMode: c.find(/Payment Mode\s*([\s\S]+?)\s*(?:Commodity Details|\n\s*\n)/i),
+    from: tripFromTo(tt).from,
+    to: tripFromTo(tt).to,
+    departure: tripDts[0] || dts[1] || "-",
+    arrival: tripDts[1] || dts[2] || "-",
+    distance: c.find(/Estimated Distance\s*:?\s*([\d.]+\s*KM)/i),
+    transName: c.find(/Transporter Name\s*([\s\S]+?)\s*Transporter Mobile/i),
+    transMob: (()=>{const m=text.match(/Transporter Mobile\s*[\s\S]*?(\d{10})/i);return m?m[1]:"-";})(),
+    vehicleType: c.find(/Vehicle Type\s*([\s\S]+?)\s*Vehicle No/i),
+    vehicle: c.find(/Vehicle No\s*[\s\S]*?\b([A-Z]{2}\d{2}[A-Z]{1,2}\d{4})\b/)
+  });
+}
+
+// ================= Receipt drawing (finalized layouts) =================
+function drawReceipt(p){
+  const W = paperDots;
+  const paper = W<=448 ? 48 : 72;              // printable mm
+  const sc = (W/paper)/8;                       // 8 dots/mm reference
+  const M = Math.round(12*sc), CW = W-2*M;
+  const cv=$("receipt"); cv.width = W;
+  const c=cv.getContext("2d");
+  let y=0, draw=false;
+
+  const font=(sz,b)=>`${b?"bold ":""}${sz*sc}px Arial, sans-serif`;
+  const tw=(s,sz,b)=>{c.font=font(sz,b);return c.measureText(s).width;};
+  const fit=(s,max,b)=>{let sz=max;while(sz>11&&tw(s,sz,b)>CW)sz-=0.5;return sz;};
+  const wrap=(s,sz,b)=>{c.font=font(sz,b);const out=[];let cur="";
+    for(const w of s.split(" ")){const t=cur?cur+" "+w:w;
+      if(c.measureText(t).width<=CW)cur=t;else{if(cur)out.push(cur);cur=w;}}
+    if(cur)out.push(cur);return out.length?out:[""];};
+  const line=(s,sz,b,center,lead=1.25)=>{for(const ln of wrap(s,sz,b)){y+=sz*sc*lead;
+    if(draw){c.font=font(sz,b);c.fillStyle="#000";
+      c.fillText(ln,center?(W-c.measureText(ln).width)/2:M,y);}}};
+  const fitLine=(s,max)=>line(s,fit(s,max,false),false);
+  const gap=px=>y+=px*sc;
+  const rule=()=>{gap(7);if(draw){c.fillStyle="#000";c.fillRect(M,y,CW,Math.max(1,2*sc));}gap(9);};
+  const thinRule=()=>{gap(5);if(draw){c.fillStyle="#000";c.fillRect(M+40*sc,y,CW-80*sc,1);}gap(7);};
+  const bar=t=>{gap(2);const bh=31;
+    if(draw){c.fillStyle="#000";c.fillRect(M,y,CW,bh);
+      c.font=font(21,true);c.fillStyle="#fff";
+      c.fillText(t,(W-c.measureText(t).width)/2,y+bh-9);}
+    y+=bh;gap(9);};
+
+  const LBL=18, VAL=25, BIG=28, TRIP=20;
+  const qrH = p.qr ? Math.round(CW*p.qr.height/p.qr.width) : 0;
+
+  const pass=()=>{
+    y=0;
+    // QR untouched: nearest-neighbour scaling, full width, nothing drawn over it
+    if(!p.qr){
+      line("[ QR NOT READABLE ]",22,true,true);
+      line("Carry the original PDF for scanning",17,false,true);
+    } else if(p.qr.isModule){
+      const cap=Math.floor(50*(W/paper));
+      const k=Math.max(1,Math.floor(Math.min(CW,cap)/p.qr.width));
+      const size=k*p.qr.width;
+      if(draw){
+        c.imageSmoothingEnabled=false;
+        c.drawImage(p.qr,M+Math.floor((CW-size)/2),y,size,size);
+        c.imageSmoothingEnabled=true;
+      }
+      y+=size;
+    } else {
+      if(draw){
+        c.imageSmoothingEnabled=false;
+        c.drawImage(p.qr,M,y,CW,qrH);
+        c.imageSmoothingEnabled=true;
+      }
+      y+=qrH;
+    }
+    gap(11);
+
+    line("GOVERNMENT OF",27,true,true);
+    line("ANDHRA PRADESH",27,true,true);
+    line("Department of Agricultural Marketing",
+         fit("Department of Agricultural Marketing",24,true),true,true,1.3);
+    for(const [b2,sz,s] of [
+      [false,21,"(Agri Produce & Livestock) Market Rules, 1969"],
+      [false,21,"Section-12 and Rule 74-A"],
+      [true,22,"e-Transport Permit for Transportation of"],
+      [true,22,"Notified Agricultural Produce"]])
+      line(s,fit(s,sz,b2),b2,true,1.3);
+    rule();
+
+    fitLine(`PERMIT NO : ${p.permitNo}`,BIG); gap(6);
+    fitLine(`PERMIT TYPE : ${p.permitType}`,BIG); gap(6);
+    fitLine(`DATE & TIME : ${p.dateTime}`,BIG);
+    rule();
+
+    if(p.kind==="market"){
+      bar("MARKET YARD INFORMATION");
+      fitLine(`AMC Name : ${p.amcName}`,VAL); gap(6);
+      line("Market Yard Name :",LBL,false);
+      line(p.marketYard,VAL,false);
+    } else {
+      bar("CHECK POST INFORMATION");
+      fitLine(`AMC Name : ${p.amcName}`,VAL); gap(6);
+      fitLine(`Check Post Name : ${p.checkPost}`,VAL);
+    }
+    gap(6);
+    const l1=`Officer Name : ${p.officer}`, l2=`Officer Mobile No : ${p.officerMob}`;
+    const os=Math.min(fit(l1,VAL,false),fit(l2,VAL,false));
+    line(l1,os,false); gap(4); line(l2,os,false);
+    rule();
+
+    bar(p.kind==="market" ? "TRADER INFORMATION" : "SELLER INFORMATION");
+    fitLine(`${p.partyLabel} : ${p.partyName}`,VAL); gap(6);
+    fitLine(`Mobile No : ${p.partyMob}`,VAL); gap(6);
+    fitLine(`Address : ${p.address}`,VAL);
+    rule();
+
+    if(p.kind==="checkpost"){
+      bar("PAYMENT INFORMATION");
+      fitLine(`Payment Mode : ${p.payMode}`,VAL);
+      rule();
+    }
+
+    bar("COMMODITY DETAILS");
+    p.items.forEach((it,i)=>{
+      if(i>0) thinRule();
+      fitLine(`S.No : ${it.sNo}`,VAL); gap(6);
+      fitLine(`Commodity : ${it.name}`,VAL); gap(6);
+      fitLine(`Trade Value (INR) : ${it.trade}`,VAL); gap(6);
+      fitLine(`Quantity : ${it.qty}`,VAL); gap(6);
+      fitLine(`${it.feeWord} (INR) : ${it.fee}`,VAL); gap(6);
+    });
+    fitLine(`TOTAL Trade Value (INR) : ${p.totalTrade}`,VAL); gap(6);
+    line(`TOTAL ${p.items[0].feeWord} (INR) :`,LBL,false);
+    fitLine(p.totalFee,BIG);
+    rule();
+
+    if(p.kind==="checkpost"){
+      bar("TRIP DETAILS");
+      line(`From : ${p.from}`,TRIP,false);
+      line(`Departure : ${p.departure}`,TRIP,false);
+      line(`To : ${p.to}`,TRIP,false);
+      line(`Arrival : ${p.arrival}`,TRIP,false);
+      line(`Estimated Distance : ${p.distance}`,TRIP,false);
+      rule();
+    }
+
+    bar("TRANSPORTER INFORMATION");
+    if(p.kind==="checkpost"){ fitLine(`Transporter Name : ${p.transName}`,VAL); gap(6); }
+    fitLine(`Transporter Mobile : ${p.transMob}`,VAL); gap(6);
+    if(p.kind==="checkpost"){ fitLine(`Vehicle Type : ${p.vehicleType}`,VAL); gap(6); }
+    fitLine(`Vehicle No : ${p.vehicle}`,VAL);
+    rule();
+
+    gap(12);
+    line(p.partyName,28,true,true);
+    line("Signature of Trader / Exporter",18,false,true);
+    rule();
+    if(p.ocr){
+      line("* Details read from photo (OCR)",17,false,true);
+      line("Verify against the original permit",17,false,true);
+      gap(6);
+    }
+    for(const s of ["Government of Andhra Pradesh - Department of",
+                    "Agricultural Marketing - Computer Generated Document",
+                    `Generated on : ${p.generated}`])
+      line(s,fit(s,17,false),false,true);
+    gap(24);
+  };
+
+  pass();
+  cv.height=Math.ceil(y);
+  draw=true;
+  c.fillStyle="#fff"; c.fillRect(0,0,W,cv.height);
+  pass();
+}
+
+// ================= QR: find anywhere, rebuild perfectly =================
+// Detection runs on progressively larger versions of the page/photo until the
+// QR is found; the rebuild samples every module from the ORIGINAL pixels with
+// an adaptive light/dark threshold (handles photos), then the result must
+// decode to the same data before it is used.
+async function findQr(big){
+  if(typeof jsQR!=="function") return densityFallback(big);
+  for(const w of [1100, 1700, big.width]){
+    if(w > big.width && w !== big.width) continue;
+    const k = w/big.width;
+    const dc = document.createElement("canvas");
+    dc.width = Math.round(big.width*k); dc.height = Math.round(big.height*k);
+    const dctx = dc.getContext("2d");
+    dctx.drawImage(big,0,0,dc.width,dc.height);
+    const id = dctx.getImageData(0,0,dc.width,dc.height);
+    const f = jsQR(id.data, dc.width, dc.height, {inversionAttempts:"attemptBoth"});
+    if(f && f.data){
+      const up = p => ({x:p.x/k, y:p.y/k});
+      const corners = {
+        tl: up(f.location.topLeftCorner), tr: up(f.location.topRightCorner),
+        bl: up(f.location.bottomLeftCorner), br: up(f.location.bottomRightCorner)
+      };
+      const canvas = buildQr(big, corners, f.version, f.data);
+      return {canvas, data:f.data};
+    }
+  }
+  return densityFallback(big);
+}
+
+function buildQr(big, cs, version, expect){
+  const bctx = big.getContext("2d");
+  const N = version*4 + 17;
+  const {tl,tr,bl,br} = cs;
+  // Read source pixels around the QR only
+  const xs=[tl.x,tr.x,bl.x,br.x], ys=[tl.y,tr.y,bl.y,br.y];
+  const pad=Math.max(8,(Math.max(...xs)-Math.min(...xs))*0.1);
+  const gx0=Math.max(0,Math.floor(Math.min(...xs)-pad)), gy0=Math.max(0,Math.floor(Math.min(...ys)-pad));
+  const gx1=Math.min(big.width,Math.ceil(Math.max(...xs)+pad)), gy1=Math.min(big.height,Math.ceil(Math.max(...ys)+pad));
+  const gw=gx1-gx0, gh=gy1-gy0;
+  const data = bctx.getImageData(gx0,gy0,gw,gh).data;
+  const gray=(x,y)=>{x=Math.round(x-gx0);y=Math.round(y-gy0);
+    if(x<0||y<0||x>=gw||y>=gh)return 255;
+    const i=(y*gw+x)*4;
+    return (data[i]+data[i+1]+data[i+2])/3;};
+
+  // Bilinear map of module centres across all four corners (handles photo tilt)
+  const at=(u,v)=>({
+    x:(1-u)*(1-v)*tl.x + u*(1-v)*tr.x + (1-u)*v*bl.x + u*v*br.x,
+    y:(1-u)*(1-v)*tl.y + u*(1-v)*tr.y + (1-u)*v*bl.y + u*v*br.y});
+
+  // First pass: collect brightness of every module centre -> adaptive threshold
+  const g=new Float32Array(N*N);
+  const mw=(tr.x-tl.x)/N, mh=(bl.y-tl.y)/N;
+  for(let j=0;j<N;j++)for(let i=0;i<N;i++){
+    const p=at((i+0.5)/N,(j+0.5)/N);
+    let s=0;
+    for(const [dx,dy] of [[0,0],[0.3,0],[-0.3,0],[0,0.3],[0,-0.3]])
+      s+=gray(p.x+dx*mw,p.y+dy*mh);
+    g[j*N+i]=s/5;
+  }
+  const sorted=Array.from(g).sort((a,b)=>a-b);
+  const lo=sorted[Math.floor(sorted.length*0.05)], hi=sorted[Math.floor(sorted.length*0.95)];
+  const th=(lo+hi)/2;
+
+  const q=4;
+  const out=document.createElement("canvas");
+  out.width=out.height=N+2*q;
+  const octx=out.getContext("2d");
+  octx.fillStyle="#fff"; octx.fillRect(0,0,out.width,out.height);
+  octx.fillStyle="#000";
+  for(let j=0;j<N;j++)for(let i=0;i<N;i++)
+    if(g[j*N+i]<th) octx.fillRect(i+q,j+q,1,1);
+
+  // Must decode to identical data, else fall back to a plain padded crop
+  if(typeof jsQR==="function"){
+    const S=8, vc=document.createElement("canvas");
+    vc.width=vc.height=out.width*S;
+    const vctx=vc.getContext("2d");
+    vctx.imageSmoothingEnabled=false;
+    vctx.drawImage(out,0,0,vc.width,vc.height);
+    const chk=jsQR(vctx.getImageData(0,0,vc.width,vc.height).data,vc.width,vc.height);
+    if(chk && chk.data===expect){ out.verified=true; out.isModule=true; return out; }
+  }
+  const crop=document.createElement("canvas");
+  crop.width=gw; crop.height=gh;
+  crop.getContext("2d").drawImage(big,gx0,gy0,gw,gh,0,0,gw,gh);
+  crop.verified=false;
+  return crop;
+}
+
+// Last resort for clean PDFs when the QR library is unavailable
+function densityFallback(big){
+  const ctx=big.getContext("2d");
+  const w=big.width,h=big.height;
+  const rx=Math.floor(w*0.60), rw=w-rx, rh=Math.floor(h*0.25);
+  const img=ctx.getImageData(rx,0,rw,rh);
+  const dark=(x,y)=>{const i=(y*rw+x)*4;
+    return (img.data[i]+img.data[i+1]+img.data[i+2])/3<100;};
+  const col=new Array(rw).fill(0);
+  for(let y=0;y<rh;y++)for(let x=0;x<rw;x++)if(dark(x,y))col[x]++;
+  const max=Math.max(...col), th=Math.max(3,max*0.3);
+  let xe=-1;for(let x=rw-1;x>=0;x--)if(col[x]>=th){xe=x;break;}
+  if(xe<0)return null;
+  let xs=xe,g=0;
+  for(let x=xe;x>=0;x--){if(col[x]>=th){xs=x;g=0;}else if(++g>20)break;}
+  const rowIn=new Array(rh).fill(0);
+  for(let y=0;y<rh;y++)for(let x=xs;x<=xe;x++)if(dark(x,y))rowIn[y]++;
+  let ys=-1;for(let y=0;y<rh;y++)if(rowIn[y]>=3){ys=y;break;}
+  if(ys<0)return null;
+  let ye=ys;g=0;
+  for(let y=ys;y<rh;y++){if(rowIn[y]>=3){ye=y;g=0;}else if(++g>20)break;}
+  const pad=Math.round((xe-xs)*0.2);
+  const cx=Math.max(0,xs-pad),cy=Math.max(0,ys-pad);
+  const cw=Math.min(rw-cx,xe-xs+2*pad),ch=Math.min(rh-cy,ye-ys+2*pad);
+  if(cw<40||ch<40)return null;
+  const out=document.createElement("canvas");
+  out.width=cw;out.height=ch;
+  out.getContext("2d").drawImage(big,rx+cx,cy,cw,ch,0,0,cw,ch);
+  out.verified=false;
+  return {canvas:out, data:null};
+}
+
+// ================= Output actions =================
+$("printBtn").onclick=()=>{
+  const dataUrl = $("receipt").toDataURL("image/png");
+  if (window.AndroidPrinter) {
+    AndroidPrinter.print(dataUrl);
+    setStatus("Printing\u2026","ok");
+  } else {
+    window.location.href = "rawbt:" + dataUrl;
+    setStatus("Sent to RawBT. If nothing happened, install RawBT from Play Store or use Share.","ok");
+  }
+};
+$("shareBtn").onclick=async()=>{
+  try{
+    const blob=await new Promise(r=>$("receipt").toBlob(r,"image/png"));
+    const f=new File([blob],"permit-receipt.png",{type:"image/png"});
+    if(navigator.canShare&&navigator.canShare({files:[f]}))
+      await navigator.share({files:[f],title:"Permit receipt"});
+    else setStatus("Sharing not supported here — use Download instead.","err");
+  }catch(e){}
+};
+$("sysBtn").onclick=()=>{
+  const dataUrl=$("receipt").toDataURL("image/png");
+  const win=window.open("","_blank");
+  const pw = paperDots<=448 ? [58,48] : [80,72];
+  win.document.write(`<!DOCTYPE html><html><head><title>Print</title><style>
+    @page{size:${pw[0]}mm auto;margin:0}
+    html,body{margin:0;padding:0}
+    img{width:${pw[1]}mm;display:block;margin:0 auto;image-rendering:pixelated}
+  </style></head><body>
+    <img src="${dataUrl}" onload="window.print()">
+  </body></html>`);
+  win.document.close();
+};
+
+$("dlBtn").onclick=()=>{
+  const a=document.createElement("a");
+  a.href=$("receipt").toDataURL("image/png");
+  a.download="permit-receipt.png";a.click();
+};
+</script>
+</body>
+</html>
