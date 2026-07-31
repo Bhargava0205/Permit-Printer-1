@@ -91,11 +91,14 @@ class EscPosPrinter {
         write(byteArrayOf(0x1B, 0x64, n.toByte()))
     }
 
-    /** Sets maximum print density so QR modules come out solid black. */
-    fun setMaxDensity() {
+    /**
+     * Moderate print density. Maximum density makes ink spread into
+     * neighbouring dots, which is what breaks dense QR codes.
+     */
+    fun setNormalDensity() {
         try {
-            // GS ( K  <density>  (supported by most clones; ignored by others)
-            write(byteArrayOf(0x1D, 0x28, 0x4B, 0x02, 0x00, 0x31, 0x08))
+            write(byteArrayOf(0x1D, 0x28, 0x4B, 0x02, 0x00, 0x31, 0x00))  // level 0 = normal
+            write(byteArrayOf(0x1B, 0x37, 7, 80, 2))                      // heat: default-ish
         } catch (_: Exception) { }
     }
 
@@ -138,6 +141,8 @@ class EscPosPrinter {
     }
 
     fun printBitmap(source: Bitmap, widthDots: Int = WIDTH_58MM) {
+        setNormalDensity()
+        feedLines(1)                       // clean paper above the QR
         val target = if (widthDots >= 512) 576 else 384        // must be /8
         val prepared: Bitmap = when {
             source.width == target -> source

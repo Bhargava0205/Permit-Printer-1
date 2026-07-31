@@ -1,5 +1,5 @@
 {
-  "version": "1.6",
+  "version": "1.7",
   "url": "https://github.com/Bhargava0205/Permit-Printer-1/releases/latest",
-  "notes": "QR fix: modules now print full size with a proper quiet zone (the previous ink-compensation made codes unreadable). Receipt verifies the printed QR itself. AMC and consignee names without labels, smaller trip text, payment section removed."
+  "notes": "QR printed with the largest module size that verifies, plus white margin above it and normal print density. This is the fix for codes the government app could not read."
 }

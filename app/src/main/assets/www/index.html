@@ -136,6 +136,7 @@ The PDF on your phone remains the official permit.</footer>
 const $ = id => document.getElementById(id);
 function setStatus(html, cls){ const s=$("status"); s.innerHTML=html; s.className=cls||""; s.style.display="block"; }
 const clean = s => s ? s.trim().replace(/\s+/g," ") : "-";
+function paperDotsIsNarrow(){ return (typeof paperDots!=="undefined") && paperDots<=448; }
 const num = s => parseFloat(String(s).replace(/,/g,"")) || 0;
 
 setTimeout(()=>{ const sp=$("splash"); if(sp) sp.classList.add("hide"); }, 1700);
@@ -286,6 +287,9 @@ async function handlePdf(file){
     else if(printed && sameData) note = " QR verified \u2714";
     else if(printed) note = " QR readable \u2714";
     else if(printed === false) note = " \u26A0 QR may not scan \u2014 try the 80mm setting.";
+    const dots = $("receipt").qrModuleDots;
+    if(printed && dots && dots <= 6 && paperDotsIsNarrow())
+      note += " (dense code \u2014 80mm paper scans more reliably)";
     else note = q.canvas.verified ? " QR verified \u2714" : " \u26A0 Test scan the printout.";
     let msg = `<span class="badge">${badge}</span>Permit ${p.permitNo} \u2014 ${p.partyName}.${note}`;
     if(p.items.length>1) msg += ` (${p.items.length} commodities \u2014 please verify amounts)`;
@@ -522,6 +526,30 @@ function parseCheckpost(text){
 }
 
 // ================= Receipt drawing (finalized layouts) =================
+
+// Chooses the biggest whole-dot module size whose rendered image still decodes.
+// Bigger modules survive thermal ink spread far better on narrow paper.
+function pickQrScale(mods, N, W){
+  const off=document.createElement("canvas"), octx=off.getContext("2d");
+  for(let k=Math.floor(W/N); k>=2; k--){
+    const qz=Math.max(0, Math.floor((W - N*k)/(2*k)));   // spare dots -> quiet zone
+    const grid=N+2*qz, size=k*grid;
+    if(size>W) continue;
+    // test it exactly as it prints: centred on white paper with margins
+    const pad=6*k;
+    off.width=W; off.height=size+2*pad;
+    octx.fillStyle="#fff"; octx.fillRect(0,0,off.width,off.height);
+    octx.fillStyle="#000";
+    const ox=Math.floor((W-size)/2);
+    for(let j=0;j<N;j++)for(let i=0;i<N;i++)
+      if(mods[j*N+i]) octx.fillRect(ox+(i+qz)*k, pad+(j+qz)*k, k, k);
+    if(typeof jsQR!=="function") return {k,qz};
+    const chk=jsQR(octx.getImageData(0,0,off.width,off.height).data,off.width,off.height);
+    if(chk && chk.data) return {k,qz};
+  }
+  return {k:Math.max(2,Math.floor(W/(N+8))), qz:4};
+}
+
 function drawReceipt(p){
   const W = paperDots;
   const paper = W<=448 ? 48 : 72;              // printable mm
@@ -529,7 +557,7 @@ function drawReceipt(p){
   const M = Math.round(12*sc), CW = W-2*M;
   const cv=$("receipt"); cv.width = W;
   const c=cv.getContext("2d");
-  let y=0, draw=false, qrBox=null;
+  let y=0, draw=false, qrBox=null, qrModuleDots=0;
 
   const font=(sz,b)=>`${b?"bold ":""}${sz*sc}px Arial, sans-serif`;
   const tw=(s,sz,b)=>{c.font=font(sz,b);return c.measureText(s).width;};
@@ -572,21 +600,20 @@ function drawReceipt(p){
       line("[ QR NOT READABLE ]",22,true,true);
       line("Carry the original PDF for scanning",17,false,true);
     } else if(p.qr.isModule && p.qr.mods){
-      // Draw the code from its own module grid: every module a whole number of
-      // printer dots, full size (thinning them breaks decoding), with the
-      // standard 4-module white quiet zone included in the block.
-      const N=p.qr.N, mods=p.qr.mods, qz=4;
-      const grid=N+2*qz;
-      const k=Math.max(1,Math.floor(W/grid));
-      const size=k*grid, x0=Math.floor((W-size)/2);
+      const N=p.qr.N, mods=p.qr.mods;
+      const sc2 = p.qr.scale || (p.qr.scale = pickQrScale(mods, N, W));
+      const k=sc2.k, qz=sc2.qz;
+      const grid=N+2*qz, size=k*grid, x0=Math.floor((W-size)/2);
+      const topPad = Math.max(24, 3*k);        // white paper above the code
       if(draw){
-        c.fillStyle="#fff"; c.fillRect(x0,y,size,size);
+        c.fillStyle="#fff"; c.fillRect(0,y,W,size+topPad+3*k);
         c.fillStyle="#000";
         for(let j=0;j<N;j++)for(let i=0;i<N;i++)
-          if(mods[j*N+i]) c.fillRect(x0+(i+qz)*k, y+(j+qz)*k, k, k);
-        qrBox={x:x0,y:y,w:size,h:size};
+          if(mods[j*N+i]) c.fillRect(x0+(i+qz)*k, y+topPad+(j+qz)*k, k, k);
+        qrBox={x:x0,y:y+topPad,w:size,h:size};
       }
-      y+=size;
+      y+=topPad+size+3*k;
+      qrModuleDots=k;
     } else if(p.qr.isModule){
       const cap=Math.floor(50*(W/paper));
       const k=Math.max(1,Math.floor(Math.min(CW,cap)/p.qr.width));
@@ -710,6 +737,7 @@ function drawReceipt(p){
   // Read the QR back off the finished receipt and decode it. This checks the
   // exact pixels that go to the printer, not an intermediate copy.
   cv.qrPrintOk = null;
+  cv.qrModuleDots = qrModuleDots;
   if(qrBox && typeof jsQR==="function"){
     try{
       const d=c.getImageData(qrBox.x,qrBox.y,qrBox.w,qrBox.h);
