@@ -107,6 +107,15 @@
   <div id="status"></div>
   <div class="preview-wrap" id="previewWrap"><canvas id="receipt" width="384"></canvas></div>
   <button class="btn btn-print" id="printBtn">🖨️ Print via RawBT</button>
+  <button class="btn" id="bigQrBtn" style="display:none;background:#fff;
+    border:1.5px solid var(--line);color:var(--ink);font-size:14px;padding:12px">
+    🔍 Show QR full size (scan from screen)</button>
+  <div id="qrModal" style="display:none;position:fixed;inset:0;background:#fff;z-index:9998;
+    align-items:center;justify-content:center;flex-direction:column;gap:14px">
+    <canvas id="bigQr" style="image-rendering:pixelated;width:88vw;max-width:420px"></canvas>
+    <button id="closeQr" style="padding:12px 22px;border-radius:10px;border:none;
+      background:#1b6b3a;color:#fff;font-size:15px;font-weight:700">Close</button>
+  </div>
   <div class="row" id="altRow">
     <button class="btn" id="sysBtn">System Print (PC)</button>
     <button class="btn" id="shareBtn">Share to print app</button>
@@ -216,12 +225,13 @@ if ("serviceWorker" in navigator) {
 async function handlePdf(file){
   try{
     setStatus("Reading permit\u2026");
-    let text = "", big;
+    let text = "", big, pdfPage = null;
     const isPdf = file.type === "application/pdf" || /\.pdf$/i.test(file.name||"");
     if(isPdf){
       const buf = await file.arrayBuffer();
       const pdf = await pdfjsLib.getDocument({data:buf}).promise;
       const page = await pdf.getPage(1);
+      pdfPage = page;
       try{ text = (await page.getTextContent()).items.map(i=>i.str).join("\n"); }catch(e){}
       const scale = 2000 / page.getViewport({scale:1}).width;
       const vp = page.getViewport({scale});
@@ -249,7 +259,33 @@ async function handlePdf(file){
       }
     }
 
-    const q = await findQr(big);          // {canvas, data} or null
+    let q = null;
+    if(isPdf && pdfPage){
+      const emb = await qrFromPdfImage(pdfPage);
+      if(emb){
+        const g = modulesFromCleanImage(emb.canvas, emb.result);
+        if(g){
+          // confirm the exact grid reproduces the same payload
+          const S=8, vc=document.createElement("canvas");
+          const grid=g.N+8;
+          vc.width=vc.height=grid*S;
+          const vx=vc.getContext("2d");
+          vx.fillStyle="#fff"; vx.fillRect(0,0,vc.width,vc.height);
+          vx.fillStyle="#000";
+          for(let j=0;j<g.N;j++)for(let i=0;i<g.N;i++)
+            if(g.mods[j*g.N+i]) vx.fillRect((i+4)*S,(j+4)*S,S,S);
+          const chk=jsQR(vx.getImageData(0,0,vc.width,vc.height).data,vc.width,vc.height);
+          if(chk && chk.data===emb.result.data){
+            const holder=document.createElement("canvas");
+            holder.width=holder.height=g.N;
+            holder.isModule=true; holder.verified=true;
+            holder.mods=g.mods; holder.N=g.N; holder.fromPdfImage=true;
+            q = {canvas:holder, data:emb.result.data};
+          }
+        }
+      }
+    }
+    if(!q) q = await findQr(big);          // fallback: locate it on the page
 
     const pay = q && q.data ? payloadFields(q.data) : {};
     const isCheckpost = /Check Post Information/i.test(text) ||
@@ -271,6 +307,7 @@ async function handlePdf(file){
       p.ocr = true;
     }
     p.qr = q ? q.canvas : null;
+    window._lastQr = (q && q.canvas.isModule) ? q.canvas : null;
     p.kind = isCheckpost ? "checkpost" : "market";
     lastPermit = p;
     drawReceipt(p);
@@ -278,13 +315,15 @@ async function handlePdf(file){
     $("previewWrap").style.display="flex";
     $("printBtn").style.display="block";
     $("altRow").style.display="flex";
+    $("bigQrBtn").style.display = (q && q.canvas.isModule) ? "block" : "none";
     if(window.AndroidPrinter){ const sb=$("shareBtn"); if(sb) sb.style.display="none"; }
     const badge = isCheckpost ? "CHECK POST" : "MARKET YARD";
     let note = "";
     const printed = $("receipt").qrPrintOk;
     const sameData = q && q.data && $("receipt").qrPrintData === q.data;
     if(!q) note = " \u26A0 QR not found \u2014 printed without QR.";
-    else if(printed && sameData) note = " QR verified \u2714";
+    else if(printed && sameData)
+      note = q.canvas.fromPdfImage ? " QR verified \u2714 (exact copy)" : " QR verified \u2714";
     else if(printed) note = " QR readable \u2714";
     else if(printed === false) note = " \u26A0 QR may not scan \u2014 try the 80mm setting.";
     const dots = $("receipt").qrModuleDots;
@@ -529,6 +568,114 @@ function parseCheckpost(text){
 
 // Chooses the biggest whole-dot module size whose rendered image still decodes.
 // Bigger modules survive thermal ink spread far better on narrow paper.
+
+// The permit PDF stores the QR as its own small image. Reading that image
+// directly gives the exact modules the department generated - unlike sampling
+// a rendered page, where tiny errors get hidden by QR error correction and
+// then rejected by stricter scanners.
+async function qrFromPdfImage(page){
+  if(typeof jsQR!=="function") return null;
+  let ops;
+  try{ ops = await page.getOperatorList(); }catch(e){ return null; }
+  const OPS = pdfjsLib.OPS || {};
+  const wanted = [OPS.paintImageXObject, OPS.paintJpegXObject,
+                  OPS.paintImageXObjectRepeat].filter(v=>v!==undefined);
+  const names = [];
+  for(let i=0;i<ops.fnArray.length;i++)
+    if(wanted.indexOf(ops.fnArray[i])>=0){
+      const a=ops.argsArray[i];
+      if(a && typeof a[0]==="string") names.push(a[0]);
+    }
+  for(const name of names){
+    let obj=null;
+    try{
+      obj = await new Promise((res)=>{
+        let done=false;
+        try{ page.objs.get(name, v=>{ done=true; res(v); }); }catch(e){ res(null); }
+        setTimeout(()=>{ if(!done) res(null); }, 3000);
+      });
+    }catch(e){}
+    if(!obj) continue;
+    const cvs = imageObjToCanvas(obj);
+    if(!cvs) continue;
+    const w=cvs.width, h=cvs.height;
+    if(w<20||h<20||w>700||h>700) continue;
+    if(Math.abs(w-h) > Math.max(6, w*0.15)) continue;      // QR is square
+    const ctx=cvs.getContext("2d");
+    const res=jsQR(ctx.getImageData(0,0,w,h).data,w,h,{inversionAttempts:"attemptBoth"});
+    if(res && res.data) return {canvas:cvs, result:res};
+  }
+  return null;
+}
+
+function imageObjToCanvas(obj){
+  try{
+    if(obj.bitmap){                       // newer pdf.js returns an ImageBitmap
+      const c=document.createElement("canvas");
+      c.width=obj.bitmap.width; c.height=obj.bitmap.height;
+      c.getContext("2d").drawImage(obj.bitmap,0,0);
+      return c;
+    }
+    const w=obj.width, h=obj.height, src=obj.data;
+    if(!w||!h||!src) return null;
+    const c=document.createElement("canvas");
+    c.width=w; c.height=h;
+    const ctx=c.getContext("2d");
+    const out=ctx.createImageData(w,h);
+    const n=w*h;
+    if(src.length>=n*4){                                  // RGBA
+      out.data.set(src.subarray(0,n*4));
+    } else if(src.length>=n*3){                           // RGB
+      for(let i=0,j=0;i<n;i++,j+=3){
+        out.data[i*4]=src[j]; out.data[i*4+1]=src[j+1];
+        out.data[i*4+2]=src[j+2]; out.data[i*4+3]=255;
+      }
+    } else if(src.length>=n){                             // 8-bit grey
+      for(let i=0;i<n;i++){
+        const v=src[i];
+        out.data[i*4]=out.data[i*4+1]=out.data[i*4+2]=v; out.data[i*4+3]=255;
+      }
+    } else {                                              // 1-bit packed
+      const rowBytes=Math.ceil(w/8);
+      for(let y=0;y<h;y++)for(let x=0;x<w;x++){
+        const byte=src[y*rowBytes+(x>>3)];
+        const bit=(byte>>(7-(x&7)))&1;
+        const v=bit?255:0;
+        const i=(y*w+x)*4;
+        out.data[i]=out.data[i+1]=out.data[i+2]=v; out.data[i+3]=255;
+      }
+    }
+    ctx.putImageData(out,0,0);
+    return c;
+  }catch(e){ return null; }
+}
+
+// Turn the clean embedded image into an exact module grid.
+function modulesFromCleanImage(cvs, res){
+  const N = (res.version||0)*4 + 17;
+  const w=cvs.width, h=cvs.height;
+  const d=cvs.getContext("2d").getImageData(0,0,w,h).data;
+  const dark=(x,y)=>{const i=((y*w)+x)*4; return (d[i]+d[i+1]+d[i+2])/3 < 128;};
+  // dark bounding box = the code itself, without its white quiet zone
+  let x0=w,y0=h,x1=-1,y1=-1;
+  for(let y=0;y<h;y++)for(let x=0;x<w;x++)
+    if(dark(x,y)){ if(x<x0)x0=x; if(x>x1)x1=x; if(y<y0)y0=y; if(y>y1)y1=y; }
+  if(x1<x0||y1<y0) return null;
+  const bw=(x1-x0+1)/N, bh=(y1-y0+1)/N;
+  const mods=new Uint8Array(N*N);
+  for(let j=0;j<N;j++)for(let i=0;i<N;i++){
+    // majority vote inside each module cell -> immune to rounding
+    let votes=0, total=0;
+    for(const fy of [0.3,0.5,0.7])for(const fx of [0.3,0.5,0.7]){
+      const px=Math.round(x0+(i+fx)*bw), py=Math.round(y0+(j+fy)*bh);
+      if(px<0||py<0||px>=w||py>=h) continue;
+      total++; if(dark(px,py)) votes++;
+    }
+    if(total && votes*2>total) mods[j*N+i]=1;
+  }
+  return {mods, N};
+}
+
 function pickQrScale(mods, N, W){
   const off=document.createElement("canvas"), octx=off.getContext("2d");
   for(let k=Math.floor(W/N); k>=2; k--){
@@ -909,6 +1056,21 @@ $("sysBtn").onclick=()=>{
   </body></html>`);
   win.document.close();
 };
+
+$("bigQrBtn").onclick=()=>{
+  const r=$("receipt");
+  const src=window._lastQr;
+  if(!src || !src.mods) return;
+  const N=src.N, k=8, qz=4, grid=N+2*qz;
+  const c=$("bigQr"); c.width=c.height=grid*k;
+  const x=c.getContext("2d");
+  x.fillStyle="#fff"; x.fillRect(0,0,c.width,c.height);
+  x.fillStyle="#000";
+  for(let j=0;j<N;j++)for(let i=0;i<N;i++)
+    if(src.mods[j*N+i]) x.fillRect((i+qz)*k,(j+qz)*k,k,k);
+  $("qrModal").style.display="flex";
+};
+$("closeQr").onclick=()=>{ $("qrModal").style.display="none"; };
 
 $("dlBtn").onclick=()=>{
   const a=document.createElement("a");

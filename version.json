@@ -1,5 +1,5 @@
 {
-  "version": "1.7",
+  "version": "1.8",
   "url": "https://github.com/Bhargava0205/Permit-Printer-1/releases/latest",
-  "notes": "QR printed with the largest module size that verifies, plus white margin above it and normal print density. This is the fix for codes the government app could not read."
+  "notes": "The QR is now taken directly from the image stored inside the permit PDF, so it is an exact copy of the departments code. Adds a full-size on-screen QR for scanning without a printer."
 }
