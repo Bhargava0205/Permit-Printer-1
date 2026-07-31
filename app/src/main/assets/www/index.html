@@ -280,9 +280,13 @@ async function handlePdf(file){
     if(window.AndroidPrinter){ const sb=$("shareBtn"); if(sb) sb.style.display="none"; }
     const badge = isCheckpost ? "CHECK POST" : "MARKET YARD";
     let note = "";
+    const printed = $("receipt").qrPrintOk;
+    const sameData = q && q.data && $("receipt").qrPrintData === q.data;
     if(!q) note = " \u26A0 QR not found \u2014 printed without QR.";
-    else if(q.canvas.verified) note = " QR verified \u2714";
-    else note = " \u26A0 Test scan the printout.";
+    else if(printed && sameData) note = " QR verified \u2714";
+    else if(printed) note = " QR readable \u2714";
+    else if(printed === false) note = " \u26A0 QR may not scan \u2014 try the 80mm setting.";
+    else note = q.canvas.verified ? " QR verified \u2714" : " \u26A0 Test scan the printout.";
     let msg = `<span class="badge">${badge}</span>Permit ${p.permitNo} \u2014 ${p.partyName}.${note}`;
     if(p.items.length>1) msg += ` (${p.items.length} commodities \u2014 please verify amounts)`;
     if(ocrUsed) msg += " Details read from photo (OCR) \u2014 verify.";
@@ -525,7 +529,7 @@ function drawReceipt(p){
   const M = Math.round(12*sc), CW = W-2*M;
   const cv=$("receipt"); cv.width = W;
   const c=cv.getContext("2d");
-  let y=0, draw=false;
+  let y=0, draw=false, qrBox=null;
 
   const font=(sz,b)=>`${b?"bold ":""}${sz*sc}px Arial, sans-serif`;
   const tw=(s,sz,b)=>{c.font=font(sz,b);return c.measureText(s).width;};
@@ -558,7 +562,7 @@ function drawReceipt(p){
       c.fillText(t,(W-c.measureText(t).width)/2,y+bh-9);}
     y+=bh;gap(9);};
 
-  const LBL=18, VAL=25, BIG=28, TRIP=20;
+  const LBL=18, VAL=25, BIG=28, TRIP=18;
   const qrH = p.qr ? Math.round(CW*p.qr.height/p.qr.width) : 0;
 
   const pass=()=>{
@@ -568,20 +572,21 @@ function drawReceipt(p){
       line("[ QR NOT READABLE ]",22,true,true);
       line("Carry the original PDF for scanning",17,false,true);
     } else if(p.qr.isModule && p.qr.mods){
-      // Use the whole paper width so each module gets as many dots as possible,
-      // and print each black module one dot smaller so printer ink-spread
-      // brings it back to nominal size (keeps the code scannable).
-      const N=p.qr.N, mods=p.qr.mods;
-      const k=Math.max(1,Math.floor(W/N));
-      const size=k*N, x0=Math.floor((W-size)/2);
+      // Draw the code from its own module grid: every module a whole number of
+      // printer dots, full size (thinning them breaks decoding), with the
+      // standard 4-module white quiet zone included in the block.
+      const N=p.qr.N, mods=p.qr.mods, qz=4;
+      const grid=N+2*qz;
+      const k=Math.max(1,Math.floor(W/grid));
+      const size=k*grid, x0=Math.floor((W-size)/2);
       if(draw){
+        c.fillStyle="#fff"; c.fillRect(x0,y,size,size);
         c.fillStyle="#000";
-        const dot=Math.max(1,k-1);
         for(let j=0;j<N;j++)for(let i=0;i<N;i++)
-          if(mods[j*N+i]) c.fillRect(x0+i*k, y+j*k, dot, dot);
+          if(mods[j*N+i]) c.fillRect(x0+(i+qz)*k, y+(j+qz)*k, k, k);
+        qrBox={x:x0,y:y,w:size,h:size};
       }
       y+=size;
-      y+=4*k;                       // white quiet zone under the code
     } else if(p.qr.isModule){
       const cap=Math.floor(50*(W/paper));
       const k=Math.max(1,Math.floor(Math.min(CW,cap)/p.qr.width));
@@ -621,12 +626,12 @@ function drawReceipt(p){
 
     if(p.kind==="market"){
       bar("MARKET YARD INFORMATION");
-      field("AMC Name", p.amcName); gap(6);
+      fitLine(p.amcName,VAL); gap(6);
       line("Market Yard Name :",LBL,false);
       line(p.marketYard,VAL,false);
     } else {
       bar("CHECK POST INFORMATION");
-      field("AMC Name", p.amcName); gap(6);
+      fitLine(p.amcName,VAL); gap(6);
       field("Check Post Name", p.checkPost);
     }
     gap(6);
@@ -642,21 +647,8 @@ function drawReceipt(p){
 
     if(p.kind==="checkpost" && p.consigneeName && p.consigneeName!=="-"){
       bar("CONSIGNEE INFORMATION");
-      field("Consignee Name", p.consigneeName); gap(6);
+      fitLine(p.consigneeName,VAL); gap(6);
       field("Mobile No", p.consigneeMob);
-      rule();
-    }
-
-    if(p.kind==="checkpost" && p.consignee && p.consignee!=="-"){
-      bar("CONSIGNEE INFORMATION");
-      fitLine(`Consignee Name : ${p.consignee}`,VAL);
-      if(p.consigneeMob){ gap(6); fitLine(`Mobile No : ${p.consigneeMob}`,VAL); }
-      rule();
-    }
-
-    if(p.kind==="checkpost"){
-      bar("PAYMENT INFORMATION");
-      field("Payment Mode", p.payMode);
       rule();
     }
 
@@ -714,6 +706,18 @@ function drawReceipt(p){
   draw=true;
   c.fillStyle="#fff"; c.fillRect(0,0,W,cv.height);
   pass();
+
+  // Read the QR back off the finished receipt and decode it. This checks the
+  // exact pixels that go to the printer, not an intermediate copy.
+  cv.qrPrintOk = null;
+  if(qrBox && typeof jsQR==="function"){
+    try{
+      const d=c.getImageData(qrBox.x,qrBox.y,qrBox.w,qrBox.h);
+      const chk=jsQR(d.data,qrBox.w,qrBox.h);
+      cv.qrPrintOk = !!(chk && chk.data);
+      cv.qrPrintData = chk ? chk.data : "";
+    }catch(e){ cv.qrPrintOk=null; }
+  }
 }
 
 // ================= QR: find anywhere, rebuild perfectly =================
