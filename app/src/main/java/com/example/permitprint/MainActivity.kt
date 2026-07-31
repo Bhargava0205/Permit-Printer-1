@@ -120,13 +120,41 @@ class MainActivity : Activity() {
 
         /** Name of the currently saved printer (shown on the button). */
         @JavascriptInterface
-        fun savedPrinterName(): String = prefs.getString("name", "") ?: ""
+        fun savedPrinterName(): String {
+            val mac = prefs.getString("mac", null) ?: return ""
+            return try {
+                val d = bondedDevices().firstOrNull { it.address == mac }
+                if (d != null) {
+                    val fresh = displayName(d)          // reflects Bluetooth renames
+                    prefs.edit().putString("name", fresh).apply()
+                    fresh
+                } else prefs.getString("name", "") ?: ""
+            } catch (e: Exception) { prefs.getString("name", "") ?: "" }
+        }
 
         @JavascriptInterface
         fun appVersion(): String = APP_VERSION
 
         @JavascriptInterface
         fun checkUpdateNow() { checkForUpdate(true) }
+
+        @JavascriptInterface
+        fun testPrint() {
+            if (!hasBtPermission()) {
+                runOnUiThread { requestBtPermissions() }
+                status("Allow the Bluetooth permission, then try again.", false); return
+            }
+            Thread {
+                try {
+                    if (!printer.isConnected) connectSaved()
+                    printer.testPage(prefs.getString("name", "printer") ?: "printer")
+                    status("Test page sent \u2714", true)
+                } catch (e: Exception) {
+                    status("Test print failed: " + e.message, false)
+                    runOnUiThread { choosePrinter() }
+                }
+            }.start()
+        }
 
         /** Fallback used if the page calls print() without a paper width. */
         @JavascriptInterface
@@ -154,6 +182,22 @@ class MainActivity : Activity() {
                 }
             }.start()
         }
+    }
+
+    /** The name the user sees in Android Bluetooth settings (rename-aware). */
+    @SuppressLint("MissingPermission")
+    private fun displayName(d: BluetoothDevice): String {
+        try {
+            if (Build.VERSION.SDK_INT >= 30) {
+                val alias = d.alias
+                if (!alias.isNullOrBlank()) return alias
+            } else {
+                val m = d.javaClass.getMethod("getAliasName")
+                val alias = m.invoke(d) as? String
+                if (!alias.isNullOrBlank()) return alias
+            }
+        } catch (_: Exception) { }
+        return d.name ?: "Unknown"
     }
 
     @SuppressLint("MissingPermission")
@@ -209,20 +253,32 @@ class MainActivity : Activity() {
         // Fresh names straight from the phone, so renamed/identical models differ
         val labels = devices.map {
             val tick = if (it.address == saved) "\u2714  " else ""
-            tick + (it.name ?: "Unknown") + "\n" + it.address
+            tick + displayName(it) + "\n" + it.address
         }.toTypedArray()
         AlertDialog.Builder(this)
             .setTitle("Select printer")
             .setItems(labels) { _, which ->
                 val d = devices[which]
                 prefs.edit().putString("mac", d.address)
-                    .putString("name", d.name ?: "Printer").apply()
+                    .putString("name", displayName(d)).apply()
                 printer.disconnect()
-                status("Printer set: " + (d.name ?: d.address), true)
+                status("Printer set: " + displayName(d), true)
                 web.evaluateJavascript("if(window.refreshPrinterName)refreshPrinterName()", null)
             }
             .setNegativeButton("Cancel", null)
             .show()
+    }
+
+    /** true when remote version (e.g. 1.6) is higher than the installed one. */
+    private fun isNewer(remote: String, local: String): Boolean {
+        fun parts(v: String) = v.trim().split(".").map { it.filter { c -> c.isDigit() } }
+            .map { if (it.isEmpty()) 0 else it.toInt() }
+        val r = parts(remote); val l = parts(local)
+        for (i in 0 until maxOf(r.size, l.size)) {
+            val a = r.getOrElse(i) { 0 }; val b = l.getOrElse(i) { 0 }
+            if (a != b) return a > b
+        }
+        return false
     }
 
     /** Checks version.json on GitHub; offers to install a newer APK. */
@@ -239,11 +295,12 @@ class MainActivity : Activity() {
                 val url = j.optString("url", "")
                 val notes = j.optString("notes", "")
                 runOnUiThread {
-                    if (latest.isNotEmpty() && latest != APP_VERSION && url.isNotEmpty()) {
+                    if (latest.isNotEmpty() && url.isNotEmpty() && isNewer(latest, APP_VERSION)) {
                         AlertDialog.Builder(this)
-                            .setTitle("Update available (" + latest + ")")
-                            .setMessage(if (notes.isEmpty()) "A newer version is ready to install."
-                                        else notes)
+                            .setTitle("Update available: " + latest)
+                            .setMessage("You have " + APP_VERSION + ".\n\n" +
+                                        (if (notes.isEmpty()) "A newer version is ready."
+                                         else notes))
                             .setPositiveButton("Update now") { _, _ ->
                                 try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
                                 catch (_: Exception) {}
@@ -282,6 +339,12 @@ class MainActivity : Activity() {
         runOnUiThread {
             web.evaluateJavascript("appStatus(" + JSONObject.quote(msg) + ", " + ok + ")", null)
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (pageReady) web.evaluateJavascript(
+            "if(window.refreshPrinterName)refreshPrinterName()", null)
     }
 
     override fun onDestroy() {

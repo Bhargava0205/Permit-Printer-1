@@ -42,7 +42,9 @@
     font-size:11px;font-weight:700;margin-right:6px;vertical-align:1px}
   .preview-wrap{display:none;background:#e4e2da;border-radius:12px;padding:18px 0;justify-content:center}
   #receipt{width:232px;image-rendering:pixelated;box-shadow:0 6px 24px rgba(0,0,0,.25);background:#fff}
-  footer{margin-top:auto;padding-top:18px;font-size:11.5px;color:#8b887f;text-align:center;max-width:430px}
+  footer{margin-top:auto;padding:18px 12px 56px 104px;font-size:11.5px;color:#8b887f;
+    text-align:center;max-width:430px}
+  body{padding-bottom:56px}
   input[type=file]{display:none}
   /* ---------- splash ---------- */
   #splash{position:fixed;inset:0;z-index:9999;background:linear-gradient(180deg,#7fd39a 0%,#63c483 45%,#4fb875 100%);
@@ -95,6 +97,8 @@
   </div>
   <div id="printerBar">
     <button id="printerBtn">🖨️ Printer : not selected</button>
+    <button id="testBtn" style="padding:11px 12px;border-radius:10px;border:1.5px solid var(--line);
+      background:#fff;color:var(--ink);font-size:13px;font-weight:600;cursor:pointer">Test</button>
     <button id="updBtn" style="padding:11px 12px;border-radius:10px;border:1.5px solid var(--line);
       background:#fff;color:var(--ink);font-size:13px;font-weight:600;cursor:pointer">Updates</button>
   </div>
@@ -113,7 +117,8 @@
 <footer>Prints a convenience copy with the original scannable QR.
 The PDF on your phone remains the official permit.</footer>
 <div id="verTag" style="position:fixed;left:12px;bottom:10px;font-size:11px;
-  color:#8b887f;line-height:1.35;pointer-events:none">
+  color:#8b887f;line-height:1.35;pointer-events:none;background:var(--paper);
+  padding:4px 8px 4px 0;border-radius:6px;z-index:5">
   AMC, Palamaner<br><span id="verNum">Version 1.3</span></div>
 
 <script>
@@ -145,6 +150,14 @@ if (window.AndroidPrinter) {
   $("printerBar").style.display = "flex";
   $("printerBtn").onclick = () => AndroidPrinter.selectPrinter();
   $("updBtn").onclick = () => AndroidPrinter.checkUpdateNow();
+  $("testBtn").onclick = () => { try{ AndroidPrinter.testPrint(); setStatus("Sending test page\u2026","ok"); }catch(e){} };
+  // this build prints directly - no RawBT, no system share sheet
+  const _lbl = () => {
+    const pb=$("printBtn"); if(pb) pb.textContent = "\uD83D\uDDA8\uFE0F  Print";
+    const sb=$("shareBtn"); if(sb) sb.style.display="none";
+  };
+  _lbl();
+  document.addEventListener("DOMContentLoaded", _lbl);
   try{
     if(AndroidPrinter.appVersion){
       const v = "Version " + AndroidPrinter.appVersion();
@@ -153,6 +166,7 @@ if (window.AndroidPrinter) {
     }
   }catch(e){}
   refreshPrinterName();
+  document.addEventListener("visibilitychange", ()=>{ if(!document.hidden) refreshPrinterName(); });
 }
 
 let paperDots = (localStorage.getItem("paperDots")|0) || 384;
@@ -263,6 +277,7 @@ async function handlePdf(file){
     $("previewWrap").style.display="flex";
     $("printBtn").style.display="block";
     $("altRow").style.display="flex";
+    if(window.AndroidPrinter){ const sb=$("shareBtn"); if(sb) sb.style.display="none"; }
     const badge = isCheckpost ? "CHECK POST" : "MARKET YARD";
     let note = "";
     if(!q) note = " \u26A0 QR not found \u2014 printed without QR.";

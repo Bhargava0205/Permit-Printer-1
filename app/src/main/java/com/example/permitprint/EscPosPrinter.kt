@@ -105,6 +105,38 @@ class EscPosPrinter {
      * happens at all - which is what keeps the QR perfectly sharp.
      */
     @JvmOverloads
+    /** Prints a short self-test so the user can confirm the printer works. */
+    fun testPage(printerName: String) {
+        val ESC = 0x1B.toByte(); val GS = 0x1D.toByte()
+        write(byteArrayOf(ESC, 0x40))                       // init
+        write(byteArrayOf(ESC, 0x61, 0x01))                 // centre
+        write(byteArrayOf(GS, 0x21, 0x11))                  // double width+height
+        write("TEST PRINT\n".toByteArray())
+        write(byteArrayOf(GS, 0x21, 0x00))                  // normal size
+        write(byteArrayOf(ESC, 0x45, 0x01))                 // bold on
+        write("Yah, I am working!\n".toByteArray())
+        write(byteArrayOf(ESC, 0x45, 0x00))                 // bold off
+        write("--------------------------------\n".toByteArray())
+        write(byteArrayOf(ESC, 0x61, 0x00))                 // left
+        write(("Printer : " + printerName + "\n").toByteArray())
+        write("AMC Permit Print\n".toByteArray())
+        write("If this slip is dark and clear,\n".toByteArray())
+        write("the printer is set up correctly.\n".toByteArray())
+        write(byteArrayOf(ESC, 0x61, 0x01))
+        write("--------------------------------\n".toByteArray())
+        // density check: solid / half / light blocks
+        val w = 384 / 8
+        for (pattern in listOf(0xFF, 0xAA, 0x88)) {
+            val rows = 24
+            write(byteArrayOf(GS, 0x76, 0x30, 0x00,
+                (w and 0xFF).toByte(), ((w shr 8) and 0xFF).toByte(),
+                (rows and 0xFF).toByte(), ((rows shr 8) and 0xFF).toByte()))
+            write(ByteArray(w * rows) { pattern.toByte() })
+            Thread.sleep(40)
+        }
+        feedLines(4)
+    }
+
     fun printBitmap(source: Bitmap, widthDots: Int = WIDTH_58MM) {
         val target = if (widthDots >= 512) 576 else 384        // must be /8
         val prepared: Bitmap = when {
