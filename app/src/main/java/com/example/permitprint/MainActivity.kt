@@ -2,9 +2,12 @@ package com.example.permitprint
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.app.Activity
 import android.app.AlertDialog
+import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
@@ -15,157 +18,170 @@ import android.util.Base64
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AppCompatActivity
-import androidx.core.content.ContextCompat
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import org.json.JSONObject
 
-class MainActivity : AppCompatActivity() {
+/**
+ * Single-screen app: the verified permit engine runs in a WebView (assets/www),
+ * printing goes out over Bluetooth ESC/POS from Kotlin.
+ * Uses only the Android platform - no external libraries - so it always builds.
+ */
+class MainActivity : Activity() {
 
     private lateinit var web: WebView
     private val printer = EscPosPrinter()
-    private val prefs by lazy { getSharedPreferences("printer", MODE_PRIVATE) }
+    private val prefs by lazy { getSharedPreferences("printer", Context.MODE_PRIVATE) }
     private var pageReady = false
     private var pendingShare: Uri? = null
-
-    private val permissionLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { }
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
         web = WebView(this)
         setContentView(web)
-        with(web.settings) {
-            javaScriptEnabled = true
-            domStorageEnabled = true
-            allowFileAccess = true
-        }
+        web.settings.javaScriptEnabled = true
+        web.settings.domStorageEnabled = true
+        web.settings.allowFileAccess = true
         web.addJavascriptInterface(Bridge(), "AndroidPrinter")
         web.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView?, url: String?) {
                 pageReady = true
-                pendingShare?.let { deliverShared(it); pendingShare = null }
+                val p = pendingShare
+                if (p != null) { pendingShare = null; deliverShared(p) }
             }
         }
         web.loadUrl("file:///android_asset/www/index.html")
-        ensureBtPermissions()
+
+        requestBtPermissions()
         handleIncoming(intent)
     }
 
-    override fun onNewIntent(intent: Intent) {
+    override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
         handleIncoming(intent)
     }
 
-    // ---------- Shared permits from WhatsApp / Files ----------
+    // ---------------- shared permits (WhatsApp / Files) ----------------
+
     private fun handleIncoming(intent: Intent?) {
         val uri: Uri? = when (intent?.action) {
             Intent.ACTION_SEND ->
-                if (Build.VERSION.SDK_INT >= 33)
-                    intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
-                else @Suppress("DEPRECATION") intent.getParcelableExtra(Intent.EXTRA_STREAM)
+                @Suppress("DEPRECATION") intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
             Intent.ACTION_VIEW -> intent.data
             else -> null
-        } ?: return
+        }
+        if (uri == null) return
         if (pageReady) deliverShared(uri) else pendingShare = uri
     }
 
     private fun deliverShared(uri: Uri) {
-        CoroutineScope(Dispatchers.IO).launch {
+        Thread {
             try {
                 val mime = contentResolver.getType(uri) ?: "application/pdf"
-                val bytes = contentResolver.openInputStream(uri)!!.use { it.readBytes() }
+                val stream = contentResolver.openInputStream(uri)
+                val bytes = stream!!.readBytes()
+                stream.close()
                 val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
-                withContext(Dispatchers.Main) {
+                runOnUiThread {
                     web.evaluateJavascript("shareBegin()", null)
                     var i = 0
+                    val step = 200000
                     while (i < b64.length) {
-                        val chunk = b64.substring(i, minOf(i + 200_000, b64.length))
-                        web.evaluateJavascript("shareChunk('$chunk')", null)
-                        i += 200_000
+                        val end = if (i + step < b64.length) i + step else b64.length
+                        val chunk = b64.substring(i, end)
+                        web.evaluateJavascript("shareChunk('" + chunk + "')", null)
+                        i += step
                     }
-                    web.evaluateJavascript("shareEnd('$mime','permit')", null)
+                    web.evaluateJavascript("shareEnd('" + mime + "','permit')", null)
                 }
             } catch (e: Exception) {
-                status("Could not open shared file: ${e.message}", false)
+                status("Could not open the shared file: " + e.message, false)
             }
-        }
+        }.start()
     }
 
-    // ---------- Bluetooth printing bridge ----------
+    // ---------------- printing bridge ----------------
+
     inner class Bridge {
         @JavascriptInterface
         fun print(dataUrl: String) {
             val b64 = dataUrl.substringAfter("base64,")
             val bytes = Base64.decode(b64, Base64.DEFAULT)
             val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-            CoroutineScope(Dispatchers.IO).launch {
+            Thread {
                 try {
                     if (!printer.isConnected) connectSaved()
                     printer.printBitmap(bmp)
                     printer.feedLines(4)
                     status("Printed \u2714", true)
                 } catch (e: Exception) {
-                    status("Print failed: ${e.message}. Tap Print again to pick a printer.", false)
-                    withContext(Dispatchers.Main) { choosePrinter() }
+                    status("Print failed: " + e.message, false)
+                    runOnUiThread { choosePrinter() }
                 }
-            }
+            }.start()
         }
     }
 
     @SuppressLint("MissingPermission")
-    private fun bonded(): List<BluetoothDevice> =
-        (getSystemService(BLUETOOTH_SERVICE) as BluetoothManager)
-            .adapter?.bondedDevices?.toList() ?: emptyList()
+    private fun bondedDevices(): List<BluetoothDevice> {
+        val manager = getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+        val adapter: BluetoothAdapter? = manager?.adapter
+        val bonded = adapter?.bondedDevices ?: return emptyList()
+        return bonded.toList()
+    }
 
     @SuppressLint("MissingPermission")
     private fun connectSaved() {
-        val devices = bonded()
-        if (devices.isEmpty()) throw Exception("pair the printer in Bluetooth settings first")
+        val devices = bondedDevices()
+        if (devices.isEmpty())
+            throw Exception("pair the printer in Bluetooth settings first")
         val saved = prefs.getString("mac", null)
-        val device = devices.firstOrNull { it.address == saved }
-            ?: devices.firstOrNull {
+        var device = devices.firstOrNull { it.address == saved }
+        if (device == null) {
+            device = devices.firstOrNull {
                 val n = (it.name ?: "").uppercase()
-                "PRINT" in n || "POS" in n || "58" in n || "MTP" in n
-            } ?: throw Exception("no printer selected")
+                n.contains("PRINT") || n.contains("POS") || n.contains("58") || n.contains("MTP")
+            }
+        }
+        if (device == null) throw Exception("select the printer")
         printer.connect(device)
         prefs.edit().putString("mac", device.address).apply()
     }
 
     @SuppressLint("MissingPermission")
     private fun choosePrinter() {
-        val devices = bonded()
+        val devices = bondedDevices()
         if (devices.isEmpty()) return
+        val names = devices.map { (it.name ?: "Unknown") + " (" + it.address + ")" }.toTypedArray()
         AlertDialog.Builder(this)
             .setTitle("Select printer")
-            .setItems(devices.map { "${it.name ?: "Unknown"} (${it.address})" }
-                .toTypedArray()) { _, which ->
+            .setItems(names) { _, which ->
                 prefs.edit().putString("mac", devices[which].address).apply()
                 printer.disconnect()
                 status("Printer saved. Tap Print again.", true)
-            }.show()
+            }
+            .show()
     }
 
-    private fun ensureBtPermissions() {
+    private fun requestBtPermissions() {
         val need = if (Build.VERSION.SDK_INT >= 31)
             arrayOf(Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN)
-        else arrayOf(Manifest.permission.BLUETOOTH, Manifest.permission.BLUETOOTH_ADMIN)
+        else
+            arrayOf(Manifest.permission.BLUETOOTH, Manifest.permission.BLUETOOTH_ADMIN)
         val missing = need.filter {
-            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+            checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED
         }
-        if (missing.isNotEmpty()) permissionLauncher.launch(missing.toTypedArray())
+        if (missing.isNotEmpty()) requestPermissions(missing.toTypedArray(), 1)
     }
 
     private fun status(msg: String, ok: Boolean) {
         runOnUiThread {
-            web.evaluateJavascript(
-                "appStatus(${org.json.JSONObject.quote(msg)}, $ok)", null)
+            web.evaluateJavascript("appStatus(" + JSONObject.quote(msg) + ", " + ok + ")", null)
         }
     }
 
-    override fun onDestroy() { super.onDestroy(); printer.disconnect() }
+    override fun onDestroy() {
+        super.onDestroy()
+        printer.disconnect()
+    }
 }

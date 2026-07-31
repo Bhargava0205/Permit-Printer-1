@@ -1,20 +1,25 @@
-# Permit Print — single Android app (converter + printer)
+# Permit Print — single Android app (converter + Bluetooth printer)
 
-One APK containing the fully verified permit engine (auto-detects Market Yard /
-Check Post, multi-commodity, photos+OCR, QR module-perfect with verification,
-58/80mm switch) AND a built-in Bluetooth ESC/POS printer driver. No RawBT, no
-website needed after install. Appears in WhatsApp's Share menu.
+## HOW TO GET THE APK (no coding needed)
 
-## Build the APK (GitHub Actions - no Android Studio needed)
-1. Push this folder to a GitHub repo.
-2. Actions tab -> wait for "Build APK" -> download the artifact / release APK.
-   The included workflow also publishes a permanent
-   releases/latest/download/app-debug.apk link.
+1. Upload ALL the files in this folder to a GitHub repository
+   (GitHub website -> Add file -> Upload files -> drag everything in -> Commit).
+2. Go to the Actions tab. The build starts on its own (or click
+   "Build APK" -> "Run workflow"). Wait about 5-8 minutes for a green tick.
+3. Go to the Code tab -> Releases (right side) -> "Latest APK" ->
+   download app-debug.apk and open it on the Android phone to install.
 
-## Or in Android Studio: open folder, Build -> Build APK(s).
+Permanent link once built (share this):
+https://github.com/YOUR-USERNAME/YOUR-REPO/releases/latest/download/app-debug.apk
 
-## Use
-- Pair the printer in Android Bluetooth settings once (PIN 0000/1234).
-- WhatsApp permit -> Share -> Permit Print -> preview -> Print.
-- First Print asks which paired device is the printer, then remembers it.
-- Internet needed on first launch (loads the PDF/QR/OCR libraries), then cached.
+## HOW TO USE THE APP
+- Pair the Bluetooth thermal printer in Android Settings first (PIN 0000/1234).
+- Open a permit in WhatsApp -> Share -> "Permit Print".
+- The receipt preview appears -> tap Print.
+  The first print asks which paired device is the printer, then remembers it.
+
+## WHAT IT DOES
+Auto-detects Market Yard and Check Post permits, reads every field exactly,
+supports multi-commodity permits, accepts photos/screenshots (OCR + QR data),
+rebuilds the QR module-perfect and verifies it decodes identically before
+printing, and offers a 58mm / 80mm paper switch.
