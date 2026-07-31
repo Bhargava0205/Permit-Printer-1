@@ -19,6 +19,8 @@ import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
 
 /**
  * Single-screen app: the verified permit engine runs in a WebView (assets/www),
@@ -26,6 +28,14 @@ import org.json.JSONObject
  * Uses only the Android platform - no external libraries - so it always builds.
  */
 class MainActivity : Activity() {
+
+    companion object {
+        /** Shown in the app and compared against version.json for updates. */
+        const val APP_VERSION = "1.2"
+        /** Edit version.json in the repo to publish an update to every phone. */
+        const val VERSION_URL =
+            "https://raw.githubusercontent.com/Bhargava0205/Permit-Printer-1/main/version.json"
+    }
 
     private lateinit var web: WebView
     private val printer = EscPosPrinter()
@@ -54,6 +64,7 @@ class MainActivity : Activity() {
 
         requestBtPermissions()
         handleIncoming(intent)
+        checkForUpdate(false)
     }
 
     override fun onNewIntent(intent: Intent?) {
@@ -103,8 +114,22 @@ class MainActivity : Activity() {
     // ---------------- printing bridge ----------------
 
     inner class Bridge {
+        /** Opens the printer chooser from the app's Printer button. */
         @JavascriptInterface
-        fun print(dataUrl: String) {
+        fun selectPrinter() { runOnUiThread { choosePrinter() } }
+
+        /** Name of the currently saved printer (shown on the button). */
+        @JavascriptInterface
+        fun savedPrinterName(): String = prefs.getString("name", "") ?: ""
+
+        @JavascriptInterface
+        fun appVersion(): String = APP_VERSION
+
+        @JavascriptInterface
+        fun checkUpdateNow() { checkForUpdate(true) }
+
+        @JavascriptInterface
+        fun print(dataUrl: String, widthDots: Int) {
             val b64 = dataUrl.substringAfter("base64,")
             val bytes = Base64.decode(b64, Base64.DEFAULT)
             val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
@@ -116,7 +141,7 @@ class MainActivity : Activity() {
             Thread {
                 try {
                     if (!printer.isConnected) connectSaved()
-                    printer.printBitmap(bmp)
+                    printer.printBitmap(bmp, widthDots)
                     printer.feedLines(4)
                     status("Printed \u2714", true)
                 } catch (e: Exception) {
@@ -158,17 +183,77 @@ class MainActivity : Activity() {
 
     @SuppressLint("MissingPermission")
     private fun choosePrinter() {
-        val devices = try { bondedDevices() } catch (e: Exception) { emptyList() }
-        if (devices.isEmpty()) return
-        val names = devices.map { (it.name ?: "Unknown") + " (" + it.address + ")" }.toTypedArray()
+        if (!hasBtPermission()) { requestBtPermissions(); return }
+        val devices = try { bondedDevices() } catch (e: Exception) {
+            AlertDialog.Builder(this).setTitle("Printer")
+                .setMessage(e.message ?: "Bluetooth problem")
+                .setPositiveButton("OK", null).show()
+            return
+        }
+        if (devices.isEmpty()) {
+            AlertDialog.Builder(this).setTitle("No paired printers")
+                .setMessage("Pair the thermal printer in Android Settings > Bluetooth first " +
+                            "(PIN 0000 or 1234), then open this list again.")
+                .setPositiveButton("Open Bluetooth settings") { _, _ ->
+                    try { startActivity(Intent(android.provider.Settings.ACTION_BLUETOOTH_SETTINGS)) }
+                    catch (_: Exception) {}
+                }
+                .setNegativeButton("Close", null).show()
+            return
+        }
+        val saved = prefs.getString("mac", null)
+        // Fresh names straight from the phone, so renamed/identical models differ
+        val labels = devices.map {
+            val tick = if (it.address == saved) "\u2714  " else ""
+            tick + (it.name ?: "Unknown") + "\n" + it.address
+        }.toTypedArray()
         AlertDialog.Builder(this)
             .setTitle("Select printer")
-            .setItems(names) { _, which ->
-                prefs.edit().putString("mac", devices[which].address).apply()
+            .setItems(labels) { _, which ->
+                val d = devices[which]
+                prefs.edit().putString("mac", d.address)
+                    .putString("name", d.name ?: "Printer").apply()
                 printer.disconnect()
-                status("Printer saved. Tap Print again.", true)
+                status("Printer set: " + (d.name ?: d.address), true)
+                web.evaluateJavascript("if(window.refreshPrinterName)refreshPrinterName()", null)
             }
+            .setNegativeButton("Cancel", null)
             .show()
+    }
+
+    /** Checks version.json on GitHub; offers to install a newer APK. */
+    private fun checkForUpdate(manual: Boolean) {
+        Thread {
+            try {
+                val conn = URL(VERSION_URL).openConnection() as HttpURLConnection
+                conn.connectTimeout = 8000; conn.readTimeout = 8000
+                conn.setRequestProperty("Cache-Control", "no-cache")
+                val body = conn.inputStream.bufferedReader().use { it.readText() }
+                conn.disconnect()
+                val j = JSONObject(body)
+                val latest = j.optString("version", "")
+                val url = j.optString("url", "")
+                val notes = j.optString("notes", "")
+                runOnUiThread {
+                    if (latest.isNotEmpty() && latest != APP_VERSION && url.isNotEmpty()) {
+                        AlertDialog.Builder(this)
+                            .setTitle("Update available (" + latest + ")")
+                            .setMessage(if (notes.isEmpty()) "A newer version is ready to install."
+                                        else notes)
+                            .setPositiveButton("Update now") { _, _ ->
+                                try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
+                                catch (_: Exception) {}
+                            }
+                            .setNegativeButton("Later", null)
+                            .show()
+                    } else if (manual) {
+                        status("You are on the latest version (" + APP_VERSION + ").", true)
+                    }
+                }
+            } catch (e: Exception) {
+                if (manual) status("Could not check for updates: " + e.message, false)
+            }
+        }.start()
     }
 
     private fun hasBtPermission(): Boolean {

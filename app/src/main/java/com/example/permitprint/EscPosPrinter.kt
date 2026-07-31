@@ -21,7 +21,8 @@ import java.util.UUID
 class EscPosPrinter {
 
     companion object {
-        const val PRINTER_WIDTH_DOTS = 384          // 58mm = 48mm printable
+        const val WIDTH_58MM = 384                  // 58mm paper, 48mm printable
+        const val WIDTH_80MM = 576                  // 80mm paper, 72mm printable
         private val SPP_UUID: UUID =
             UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
     }
@@ -98,14 +99,20 @@ class EscPosPrinter {
         } catch (_: Exception) { }
     }
 
-    fun printBitmap(source: Bitmap) {
-        // Fit to the printer width WITHOUT smoothing.
+    /**
+     * @param widthDots 384 for a 58mm printer, 576 for an 80mm printer.
+     * The receipt is generated at exactly this width, so normally no resizing
+     * happens at all - which is what keeps the QR perfectly sharp.
+     */
+    @JvmOverloads
+    fun printBitmap(source: Bitmap, widthDots: Int = PRINTER_WIDTH_DOTS) {
+        val target = if (widthDots >= 512) 576 else 384        // must be /8
         val prepared: Bitmap = when {
-            source.width == PRINTER_WIDTH_DOTS -> source
-            source.width < PRINTER_WIDTH_DOTS -> padToWidth(source)
+            source.width == target -> source
+            source.width < target -> padToWidth(source, target)
             else -> {
-                val h = (source.height.toLong() * PRINTER_WIDTH_DOTS / source.width).toInt()
-                Bitmap.createScaledBitmap(source, PRINTER_WIDTH_DOTS, h, false) // no filter
+                val h = (source.height.toLong() * target / source.width).toInt()
+                Bitmap.createScaledBitmap(source, target, h, false)   // no filter
             }
         }
 
@@ -136,11 +143,11 @@ class EscPosPrinter {
     }
 
     /** Centres a narrower image on white paper - no scaling, no blur. */
-    private fun padToWidth(src: Bitmap): Bitmap {
-        val outBmp = Bitmap.createBitmap(PRINTER_WIDTH_DOTS, src.height, Bitmap.Config.ARGB_8888)
+    private fun padToWidth(src: Bitmap, target: Int): Bitmap {
+        val outBmp = Bitmap.createBitmap(target, src.height, Bitmap.Config.ARGB_8888)
         val canvas = android.graphics.Canvas(outBmp)
         canvas.drawColor(Color.WHITE)
-        canvas.drawBitmap(src, ((PRINTER_WIDTH_DOTS - src.width) / 2).toFloat(), 0f, null)
+        canvas.drawBitmap(src, ((target - src.width) / 2).toFloat(), 0f, null)
         return outBmp
     }
 

@@ -12,6 +12,11 @@
 Permanent link once built (share this):
 https://github.com/YOUR-USERNAME/YOUR-REPO/releases/latest/download/app-debug.apk
 
+## UPDATING THE APP LATER
+Edit version.json in this repo (raise "version"), push, and let Actions build.
+Every phone that opens the app then sees an "Update available" prompt.
+NOTE: the repository must be PUBLIC for update checks and APK downloads to work.
+
 ## HOW TO USE THE APP
 - Pair the Bluetooth thermal printer in Android Settings first (PIN 0000/1234).
 - Open a permit in WhatsApp -> Share -> "Permit Print".

@@ -55,6 +55,11 @@
     animation:rise .7s .55s ease both;line-height:1.45}
   @keyframes pop{from{transform:scale(.6);opacity:0}to{transform:scale(1);opacity:1}}
   @keyframes rise{from{transform:translateY(14px);opacity:0}to{transform:translateY(0);opacity:1}}
+  #printerBar{display:none;gap:8px;align-items:center}
+  #printerBtn{flex:1;padding:11px;border-radius:10px;border:1.5px solid var(--line);
+    background:#fff;color:var(--ink);font-size:13px;font-weight:600;cursor:pointer;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
 
 </style>
 </head>
@@ -63,7 +68,7 @@
   <div class="ring"><img src="applogo.png" alt=""></div>
   <h2>Agricultural Market Committee</h2>
   <p>Palamaner, Chittoor District</p>
-  <div class="foot">AMC, Palamaner<br>Version 1.0</div>
+  <div class="foot">AMC, Palamaner<br>Version 1.2</div>
 </div>
 
 <header>
@@ -78,14 +83,19 @@
 
 <main>
   <div style="display:flex;gap:8px">
-    <button class="btn" id="p58" style="flex:1;font-size:13px;padding:9px;background:#1b6b3a;color:#fff">58mm (mobile)</button>
-    <button class="btn" id="p80" style="flex:1;font-size:13px;padding:9px;background:#fff;border:1.5px solid var(--line);color:var(--ink)">80mm (Epson TM-T82)</button>
+    <button class="btn" id="p58" style="flex:1;font-size:13px;padding:9px;background:#1b6b3a;color:#fff">58mm printer</button>
+    <button class="btn" id="p80" style="flex:1;font-size:13px;padding:9px;background:#fff;border:1.5px solid var(--line);color:var(--ink)">80mm printer</button>
+  </div>
+  <div id="printerBar">
+    <button id="printerBtn">🖨️ Printer : not selected</button>
+    <button id="updBtn" style="padding:11px 12px;border-radius:10px;border:1.5px solid var(--line);
+      background:#fff;color:var(--ink);font-size:13px;font-weight:600;cursor:pointer">Updates</button>
   </div>
   <button class="btn btn-pick" id="pickBtn">📄 Select Permit PDF</button>
   <input type="file" id="file" accept="application/pdf,image/*">
   <div id="status"></div>
   <div class="preview-wrap" id="previewWrap"><canvas id="receipt" width="384"></canvas></div>
-  <button class="btn btn-print" id="printBtn">🖨️ Print</button>
+  <button class="btn btn-print" id="printBtn">🖨️ Print via RawBT</button>
   <div class="row" id="altRow">
     <button class="btn" id="sysBtn">System Print (PC)</button>
     <button class="btn" id="shareBtn">Share to print app</button>
@@ -97,7 +107,7 @@
 The PDF on your phone remains the official permit.</footer>
 <div id="verTag" style="position:fixed;left:12px;bottom:10px;font-size:11px;
   color:#8b887f;line-height:1.35;pointer-events:none">
-  AMC, Palamaner<br>Version 1.0</div>
+  AMC, Palamaner<br><span id="verNum">Version 1.2</span></div>
 
 <script>
 pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -108,22 +118,25 @@ function setStatus(html, cls){ const s=$("status"); s.innerHTML=html; s.classNam
 const clean = s => s ? s.trim().replace(/\s+/g," ") : "-";
 const num = s => parseFloat(String(s).replace(/,/g,"")) || 0;
 
-// splash: show briefly on launch
-setTimeout(()=>{ const s=$("splash"); if(s) s.classList.add("hide"); }, 1700);
+setTimeout(()=>{ const sp=$("splash"); if(sp) sp.classList.add("hide"); }, 1700);
+
+// ---- inside the Android app: printer button, version, update check ----
+window.refreshPrinterName = function(){
+  if(!window.AndroidPrinter || !AndroidPrinter.savedPrinterName) return;
+  const n = AndroidPrinter.savedPrinterName();
+  $("printerBtn").textContent = "🖨️ Printer : " + (n && n.length ? n : "not selected");
+};
+if (window.AndroidPrinter) {
+  $("printerBar").style.display = "flex";
+  $("printerBtn").onclick = () => AndroidPrinter.selectPrinter();
+  $("updBtn").onclick = () => AndroidPrinter.checkUpdateNow();
+  try{ if(AndroidPrinter.appVersion) $("verNum").textContent = "Version " + AndroidPrinter.appVersion(); }catch(e){}
+  refreshPrinterName();
+}
 
 let paperDots = (localStorage.getItem("paperDots")|0) || 384;
-// Inside the Android app the printer is 58mm: lock it and hide the switch
-if (window.AndroidPrinter) {
-  paperDots = 384;
-  try{ localStorage.setItem("paperDots", 384); }catch(e){}
-}
 let lastPermit = null;
 function paintPaperBtns(){
-  if (window.AndroidPrinter) {
-    const r = $("p58").parentElement; if(r) r.style.display = "none";
-    $("receipt").style.width = "232px";
-    return;
-  }
   const on = {background:"#1b6b3a",color:"#fff",border:"none"};
   const off = {background:"#fff",color:"#1c1c1c",border:"1.5px solid #d8d5cc"};
   const a = paperDots===384 ? on : off, b = paperDots===384 ? off : on;
@@ -136,20 +149,20 @@ function setPaper(d){
   paintPaperBtns();
   if(lastPermit) drawReceipt(lastPermit);
 }
-window.appStatus = (msg, ok) => setStatus(msg, ok ? "ok" : "err");
 $("p58").onclick = () => setPaper(384);
 $("p80").onclick = () => setPaper(576);
 paintPaperBtns();
 
-let _shareBuf = "";
-window.shareBegin = () => { _shareBuf = ""; };
-window.shareChunk = s => { _shareBuf += s; };
-window.shareEnd = (mime, name) => {
-  const bin = atob(_shareBuf); _shareBuf = "";
+let _shareBuf="";
+window.shareBegin = () => { _shareBuf=""; };
+window.shareChunk = t => { _shareBuf += t; };
+window.shareEnd = (mime,name) => {
+  const bin = atob(_shareBuf); _shareBuf="";
   const a = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i);
-  handlePdf(new File([a], name || "permit", {type: mime || "application/pdf"}));
+  for(let i=0;i<bin.length;i++) a[i]=bin.charCodeAt(i);
+  handlePdf(new File([a], name||"permit", {type:mime||"application/pdf"}));
 };
+window.appStatus = (m, ok) => setStatus(m, ok ? "ok" : "err");
 
 $("pickBtn").onclick = () => $("file").click();
 $("file").onchange = e => { if(e.target.files[0]) handlePdf(e.target.files[0]); };
@@ -204,7 +217,8 @@ async function handlePdf(file){
     const isCheckpost = /Check Post Information/i.test(text) ||
       (!/Market Yard Information/i.test(text) &&
        (pay.typeCode === "NTP" || !!pay.from));
-    const p = isCheckpost ? parseCheckpost(text||"") : parseMarketYard(text||"");
+    const cleanText = stripWatermark(text || "");
+    const p = isCheckpost ? parseCheckpost(cleanText) : parseMarketYard(cleanText);
     mergePayload(p, pay, isCheckpost);
     if(ocrUsed){
       if(pay.permitNo) p.permitNo = pay.permitNo;
@@ -267,7 +281,7 @@ function payloadFields(d){
     return m ? clean(m[1]).replace(/[,\s]+$/,"") : "";
   };
   const splitPlace = v => {
-    const m = v.match(/^(.*?)\s*\((.*?)\)\s*$/);
+    const m = v.match(/^([\s\S]*)\s*\(([^()]*)\)\s*$/);
     return m ? {place: clean(m[1]), time: clean(m[2])} : {place: v, time: ""};
   };
   const typeCode = get("Permit Type");
@@ -291,12 +305,23 @@ function mergePayload(p, pay, isCheckpost){
   fill("permitType", pay.permitType);
   fill("partyMob", pay.mobile);
   if(isCheckpost){
+    // The QR carries the exact trip text - always prefer it over page layout
+    if(pay.from) p.from = pay.from;
+    if(pay.departure) p.departure = pay.departure;
+    if(pay.to) p.to = pay.to;
+    if(pay.arrival) p.arrival = pay.arrival;
     fill("from", pay.from); fill("departure", pay.departure);
     fill("to", pay.to); fill("arrival", pay.arrival);
   }
 }
 
 // ================= Shared field extraction =================
+// The page carries a diagonal "Department of Agricultural Marketing" watermark
+// whose words land between labels and values. Remove those lines first.
+function stripWatermark(t){
+  return t.replace(/^[ \t]*(?:Department of Agricultural Marketing|Department|of Agricultural|Marketing)[ \t]*$/gmi, "");
+}
+
 function commonFields(text){
   const find=(re,d="-")=>{const m=text.match(re);return m?clean(m[1]):d;};
   return {
@@ -376,20 +401,26 @@ function parseMarketYard(text){
     partyLabel: "Trader Name",
     partyName: c.find(/Trader Name\s*([\s\S]+?)\s*(?:Mobile No|Address)/i),
     partyMob: mob ? mob[1] : "-",
-    address: c.find(/Address\s*([\s\S]+?)\s*(?:\b\d{10}\b|Commodity Details)/i),
+    address: c.find(/Address\s*([\s\S]+?)\s*(?:Mobile No|Consignee|Payment Information|Commodity Details|\b\d{10}\b)/i),
     transMob: (()=>{const t=text.match(/Transporter\s*\n?\s*(?:Information|Mobile)([\s\S]+)$/i);
       const m=t&&t[1].match(/\b(\d{10})\b/);return m?m[1]:"-";})(),
     vehicle: c.find(/Vehicle No\s*[\s\S]*?\b([A-Z]{2}\d{2}[A-Z]{1,2}\d{4})\b/)
   });
 }
 
-// FROM/TO values may appear after both labels (column order) or after each label
+// TRIP DETAILS layout: "FROM" and "TO" labels first, then the two addresses
+// as separate blank-line-separated blocks, then the two date-times.
 function tripFromTo(tt){
-  const adjacent = /FROM\s*\n?\s*TO\s*\n/i.test(tt);
-  if(adjacent){
-    const seg = tt.match(/TO\s*([\s\S]+?)\s*\d{2}-\d{2}-\d{4}/i);
-    const lines = seg ? seg[1].split("\n").map(s=>s.trim()).filter(Boolean) : [];
-    return {from: lines[0] || "-", to: clean(lines.slice(1).join(" ")) || "-"};
+  const afterLabels = tt.match(/FROM\s*\n[\s\S]*?TO\s*\n([\s\S]*?)(?=\d{2}-\d{2}-\d{4})/i);
+  if(afterLabels){
+    const blocks = afterLabels[1].split(/\n\s*\n/)
+      .map(b => clean(b.replace(/\u27ea|\u27eb|\u279a|➪/g,"")))
+      .filter(b => b && b !== "-");
+    if(blocks.length >= 2) return {from: blocks[0], to: blocks.slice(1).join(" ")};
+    if(blocks.length === 1){
+      const lines = blocks[0].split(" ");
+      return {from: blocks[0], to: "-"};
+    }
   }
   const f = tt.match(/FROM\s*([\s\S]+?)\s*\d{2}-\d{2}-\d{4}/i);
   const t = tt.match(/TO\s*([\s\S]+?)\s*\d{2}-\d{2}-\d{4}/i);
@@ -410,8 +441,27 @@ function parseCheckpost(text){
     partyLabel: "Seller Name",
     partyName: c.find(/Seller Name\s*([\s\S]+?)\s*(?:Mobile No|Address)/i),
     partyMob: mob ? mob[1] : "-",
-    address: c.find(/Address\s*([\s\S]+?)\s*(?:Payment Information|\b\d{10}\b|Commodity Details)/i),
-    payMode: c.find(/Payment Mode\s*([\s\S]+?)\s*(?:Commodity Details|\n\s*\n)/i),
+    address: c.find(/Address\s*([\s\S]+?)\s*(?:Mobile No|Consignee|Payment Information|Commodity Details|\b\d{10}\b)/i),
+    payMode: (()=>{
+      const seg = text.match(/Payment Mode([\s\S]{0,300})/i);
+      if(seg){
+        const known = seg[1].match(/\b(CASH PAYMENT|ONLINE|UPI|CHEQUE|DD|CASH)\b/i);
+        if(known) return known[1].toUpperCase();
+      }
+      const m = text.match(/Payment Mode\s*([\s\S]+?)\s*(?:Commodity Details|\n\s*\n)/i);
+      if(!m) return "-";
+      const v = clean(m[1]).replace(/Department of Agricultural Marketing/ig,"").trim();
+      return v || "-";
+    })(),
+    consigneeName: c.find(/Consignee\s*\n?\s*Name\s*([\s\S]+?)\s*(?:Mobile No|Payment Information|Commodity Details)/i),
+    consigneeMob: (()=>{
+      const b = text.match(/Consignee Information([\s\S]+?)(?:Payment Information|Commodity Details)/i);
+      let m = b && b[1].match(/\b(\d{10})\b/);
+      if(m) return m[1];
+      const sb = text.match(/Seller Information([\s\S]+?)(?:Consignee Information|Payment Information|Commodity Details)/i);
+      const all = sb ? [...sb[1].matchAll(/\b(\d{10})\b/g)].map(x=>x[1]) : [];
+      return all.length > 1 ? all[1] : "-";
+    })(),
     from: tripFromTo(tt).from,
     to: tripFromTo(tt).to,
     departure: tripDts[0] || dts[1] || "-",
@@ -419,7 +469,12 @@ function parseCheckpost(text){
     distance: c.find(/Estimated Distance\s*:?\s*([\d.]+\s*KM)/i),
     transName: c.find(/Transporter Name\s*([\s\S]+?)\s*Transporter Mobile/i),
     transMob: (()=>{const m=text.match(/Transporter Mobile\s*[\s\S]*?(\d{10})/i);return m?m[1]:"-";})(),
-    vehicleType: c.find(/Vehicle Type\s*([\s\S]+?)\s*Vehicle No/i),
+    vehicleType: (()=>{
+      const m1 = text.match(/Vehicle Type\s*([\s\S]+?)\s*Vehicle No/i);
+      if(m1 && !/Department|Marketing/i.test(m1[1])) return clean(m1[1]);
+      const m2 = text.match(/Vehicle Type\s*((?:\s*\n)*(?:\s*[\u27ea\u27eb\u279a➪]\s*\n)*\s*[^\n]+)/i);
+      return m2 ? clean(m2[1].replace(/[\u27ea\u27eb\u279a➪]/g,"")) : "-";
+    })(),
     vehicle: c.find(/Vehicle No\s*[\s\S]*?\b([A-Z]{2}\d{2}[A-Z]{1,2}\d{4})\b/)
   });
 }
@@ -436,7 +491,8 @@ function drawReceipt(p){
 
   const font=(sz,b)=>`${b?"bold ":""}${sz*sc}px Arial, sans-serif`;
   const tw=(s,sz,b)=>{c.font=font(sz,b);return c.measureText(s).width;};
-  const fit=(s,max,b)=>{let sz=max;while(sz>11&&tw(s,sz,b)>CW)sz-=0.5;return sz;};
+  const MINPT=18;   // never shrink below this: wrap instead
+  const fit=(s,max,b)=>{let sz=max;while(sz>MINPT&&tw(s,sz,b)>CW)sz-=0.5;return sz;};
   const wrap=(s,sz,b)=>{c.font=font(sz,b);const out=[];let cur="";
     for(const w of s.split(" ")){const t=cur?cur+" "+w:w;
       if(c.measureText(t).width<=CW)cur=t;else{if(cur)out.push(cur);cur=w;}}
@@ -445,6 +501,16 @@ function drawReceipt(p){
     if(draw){c.font=font(sz,b);c.fillStyle="#000";
       c.fillText(ln,center?(W-c.measureText(ln).width)/2:M,y);}}};
   const fitLine=(s,max)=>line(s,fit(s,max,false),false);
+  // Prints "Label : value" on one line when it fits at a readable size;
+  // otherwise prints the label, then wraps the value - never shrinks to unreadable.
+  const MINSZ = 19;                       // smallest allowed body text
+  const field=(label,value,max)=>{
+    const one = label + " : " + value;
+    const sz = fit(one, max||VAL, false);
+    if(sz >= MINSZ){ line(one, sz, false); return; }
+    line(label + " :", LBL, false);
+    line(String(value), Math.max(MINSZ, fit(String(value), max||VAL, false)), false);
+  };
   const gap=px=>y+=px*sc;
   const rule=()=>{gap(7);if(draw){c.fillStyle="#000";c.fillRect(M,y,CW,Math.max(1,2*sc));}gap(9);};
   const thinRule=()=>{gap(5);if(draw){c.fillStyle="#000";c.fillRect(M+40*sc,y,CW-80*sc,1);}gap(7);};
@@ -463,6 +529,21 @@ function drawReceipt(p){
     if(!p.qr){
       line("[ QR NOT READABLE ]",22,true,true);
       line("Carry the original PDF for scanning",17,false,true);
+    } else if(p.qr.isModule && p.qr.mods){
+      // Use the whole paper width so each module gets as many dots as possible,
+      // and print each black module one dot smaller so printer ink-spread
+      // brings it back to nominal size (keeps the code scannable).
+      const N=p.qr.N, mods=p.qr.mods;
+      const k=Math.max(1,Math.floor(W/N));
+      const size=k*N, x0=Math.floor((W-size)/2);
+      if(draw){
+        c.fillStyle="#000";
+        const dot=Math.max(1,k-1);
+        for(let j=0;j<N;j++)for(let i=0;i<N;i++)
+          if(mods[j*N+i]) c.fillRect(x0+i*k, y+j*k, dot, dot);
+      }
+      y+=size;
+      y+=4*k;                       // white quiet zone under the code
     } else if(p.qr.isModule){
       const cap=Math.floor(50*(W/paper));
       const k=Math.max(1,Math.floor(Math.min(CW,cap)/p.qr.width));
@@ -502,61 +583,76 @@ function drawReceipt(p){
 
     if(p.kind==="market"){
       bar("MARKET YARD INFORMATION");
-      fitLine(`AMC Name : ${p.amcName}`,VAL); gap(6);
+      field("AMC Name", p.amcName); gap(6);
       line("Market Yard Name :",LBL,false);
       line(p.marketYard,VAL,false);
     } else {
       bar("CHECK POST INFORMATION");
-      fitLine(`AMC Name : ${p.amcName}`,VAL); gap(6);
-      fitLine(`Check Post Name : ${p.checkPost}`,VAL);
+      field("AMC Name", p.amcName); gap(6);
+      field("Check Post Name", p.checkPost);
     }
     gap(6);
-    const l1=`Officer Name : ${p.officer}`, l2=`Officer Mobile No : ${p.officerMob}`;
-    const os=Math.min(fit(l1,VAL,false),fit(l2,VAL,false));
-    line(l1,os,false); gap(4); line(l2,os,false);
+    field("Officer Name", p.officer); gap(4);
+    field("Officer Mobile No", p.officerMob);
     rule();
 
     bar(p.kind==="market" ? "TRADER INFORMATION" : "SELLER INFORMATION");
-    fitLine(`${p.partyLabel} : ${p.partyName}`,VAL); gap(6);
-    fitLine(`Mobile No : ${p.partyMob}`,VAL); gap(6);
-    fitLine(`Address : ${p.address}`,VAL);
+    field(p.partyLabel, p.partyName); gap(6);
+    field("Mobile No", p.partyMob); gap(6);
+    field("Address", p.address);
     rule();
+
+    if(p.kind==="checkpost" && p.consigneeName && p.consigneeName!=="-"){
+      bar("CONSIGNEE INFORMATION");
+      field("Consignee Name", p.consigneeName); gap(6);
+      field("Mobile No", p.consigneeMob);
+      rule();
+    }
+
+    if(p.kind==="checkpost" && p.consignee && p.consignee!=="-"){
+      bar("CONSIGNEE INFORMATION");
+      fitLine(`Consignee Name : ${p.consignee}`,VAL);
+      if(p.consigneeMob){ gap(6); fitLine(`Mobile No : ${p.consigneeMob}`,VAL); }
+      rule();
+    }
 
     if(p.kind==="checkpost"){
       bar("PAYMENT INFORMATION");
-      fitLine(`Payment Mode : ${p.payMode}`,VAL);
+      field("Payment Mode", p.payMode);
       rule();
     }
 
     bar("COMMODITY DETAILS");
     p.items.forEach((it,i)=>{
       if(i>0) thinRule();
-      fitLine(`S.No : ${it.sNo}`,VAL); gap(6);
-      fitLine(`Commodity : ${it.name}`,VAL); gap(6);
-      fitLine(`Trade Value (INR) : ${it.trade}`,VAL); gap(6);
-      fitLine(`Quantity : ${it.qty}`,VAL); gap(6);
-      fitLine(`${it.feeWord} (INR) : ${it.fee}`,VAL); gap(6);
+      field("S.No", it.sNo); gap(6);
+      field("Commodity", it.name); gap(6);
+      field("Trade Value (INR)", it.trade); gap(6);
+      field("Quantity", it.qty); gap(6);
+      field(it.feeWord + " (INR)", it.fee); gap(6);
     });
-    fitLine(`TOTAL Trade Value (INR) : ${p.totalTrade}`,VAL); gap(6);
+    field("TOTAL Trade Value (INR)", p.totalTrade); gap(6);
     line(`TOTAL ${p.items[0].feeWord} (INR) :`,LBL,false);
     fitLine(p.totalFee,BIG);
     rule();
 
     if(p.kind==="checkpost"){
       bar("TRIP DETAILS");
-      line(`From : ${p.from}`,TRIP,false);
-      line(`Departure : ${p.departure}`,TRIP,false);
-      line(`To : ${p.to}`,TRIP,false);
-      line(`Arrival : ${p.arrival}`,TRIP,false);
-      line(`Estimated Distance : ${p.distance}`,TRIP,false);
+      line("From :",LBL,false);
+      line(p.from,VAL,false);
+      field("Departure", p.departure); gap(5);
+      line("To :",LBL,false);
+      line(p.to,VAL,false);
+      field("Arrival", p.arrival); gap(5);
+      field("Estimated Distance", p.distance);
       rule();
     }
 
     bar("TRANSPORTER INFORMATION");
-    if(p.kind==="checkpost"){ fitLine(`Transporter Name : ${p.transName}`,VAL); gap(6); }
-    fitLine(`Transporter Mobile : ${p.transMob}`,VAL); gap(6);
-    if(p.kind==="checkpost"){ fitLine(`Vehicle Type : ${p.vehicleType}`,VAL); gap(6); }
-    fitLine(`Vehicle No : ${p.vehicle}`,VAL);
+    if(p.kind==="checkpost"){ field("Transporter Name", p.transName); gap(6); }
+    field("Transporter Mobile", p.transMob); gap(6);
+    if(p.kind==="checkpost"){ field("Vehicle Type", p.vehicleType); gap(6); }
+    field("Vehicle No", p.vehicle);
     rule();
 
     gap(12);
@@ -646,14 +742,15 @@ function buildQr(big, cs, version, expect){
   const lo=sorted[Math.floor(sorted.length*0.05)], hi=sorted[Math.floor(sorted.length*0.95)];
   const th=(lo+hi)/2;
 
-  const q=1;
+  const q=4;
   const out=document.createElement("canvas");
   out.width=out.height=N+2*q;
   const octx=out.getContext("2d");
   octx.fillStyle="#fff"; octx.fillRect(0,0,out.width,out.height);
   octx.fillStyle="#000";
+  const mods=new Uint8Array(N*N);
   for(let j=0;j<N;j++)for(let i=0;i<N;i++)
-    if(g[j*N+i]<th) octx.fillRect(i+q,j+q,1,1);
+    if(g[j*N+i]<th){ mods[j*N+i]=1; octx.fillRect(i+q,j+q,1,1); }
 
   // Must decode to identical data, else fall back to a plain padded crop
   if(typeof jsQR==="function"){
@@ -663,7 +760,10 @@ function buildQr(big, cs, version, expect){
     vctx.imageSmoothingEnabled=false;
     vctx.drawImage(out,0,0,vc.width,vc.height);
     const chk=jsQR(vctx.getImageData(0,0,vc.width,vc.height).data,vc.width,vc.height);
-    if(chk && chk.data===expect){ out.verified=true; out.isModule=true; return out; }
+    if(chk && chk.data===expect){
+      out.verified=true; out.isModule=true; out.mods=mods; out.N=N;
+      return out;
+    }
   }
   const crop=document.createElement("canvas");
   crop.width=gw; crop.height=gh;
@@ -706,14 +806,15 @@ function densityFallback(big){
 
 // ================= Output actions =================
 $("printBtn").onclick=()=>{
-  const dataUrl = $("receipt").toDataURL("image/png");
+  const dataUrl=$("receipt").toDataURL("image/png");
   if (window.AndroidPrinter) {
-    AndroidPrinter.print(dataUrl);
-    setStatus("Printing\u2026","ok");
-  } else {
-    window.location.href = "rawbt:" + dataUrl;
-    setStatus("Sent to RawBT. If nothing happened, install RawBT from Play Store or use Share.","ok");
+    try { AndroidPrinter.print(dataUrl, paperDots); }
+    catch(e) { AndroidPrinter.print(dataUrl); }
+    setStatus("Printing on " + (paperDots<=448?"58mm":"80mm") + " paper\u2026","ok");
+    return;
   }
+  window.location.href="rawbt:"+dataUrl;
+  setStatus("Sent to RawBT. If nothing happened, install RawBT from Play Store or use Share.","ok");
 };
 $("shareBtn").onclick=async()=>{
   try{

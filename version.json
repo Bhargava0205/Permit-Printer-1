@@ -1,0 +1,5 @@
+{
+  "version": "1.2",
+  "url": "https://github.com/Bhargava0205/Permit-Printer-1/releases/latest/download/app-debug.apk",
+  "notes": "QR now prints larger and bleed-compensated (scannable on dense check post permits). Trip From/To addresses read from the QR itself. Consignee section added. Printer selection button. In-app update check."
+}
