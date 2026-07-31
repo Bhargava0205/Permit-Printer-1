@@ -280,6 +280,9 @@ async function handlePdf(file){
             holder.width=holder.height=g.N;
             holder.isModule=true; holder.verified=true;
             holder.mods=g.mods; holder.N=g.N; holder.fromPdfImage=true;
+            // the department's own pixels, cropped to the code itself
+            const cropped = cropCodeFromImage(emb.canvas);
+            holder.exact = cropped ? reduceToModules(cropped, g.N) : null;
             q = {canvas:holder, data:emb.result.data};
           }
         }
@@ -650,6 +653,40 @@ function imageObjToCanvas(obj){
   }catch(e){ return null; }
 }
 
+// Crop the code area out of the embedded image. The result is the
+// department's own pixels - we only enlarge them by a whole number later.
+function cropCodeFromImage(cvs){
+  const w=cvs.width, h=cvs.height;
+  const ctx=cvs.getContext("2d");
+  const d=ctx.getImageData(0,0,w,h).data;
+  const dark=(x,y)=>{const i=((y*w)+x)*4; return (d[i]+d[i+1]+d[i+2])/3 < 128;};
+  let x0=w,y0=h,x1=-1,y1=-1;
+  for(let y=0;y<h;y++)for(let x=0;x<w;x++)
+    if(dark(x,y)){ if(x<x0)x0=x; if(x>x1)x1=x; if(y<y0)y0=y; if(y>y1)y1=y; }
+  if(x1<x0||y1<y0) return null;
+  const cw=x1-x0+1, ch=y1-y0+1;
+  const out=document.createElement("canvas");
+  out.width=cw; out.height=ch;
+  const octx=out.getContext("2d");
+  octx.imageSmoothingEnabled=false;
+  octx.drawImage(cvs, x0,y0,cw,ch, 0,0,cw,ch);
+  out.codePx = cw;
+  return out;
+}
+
+// Some permits store 2-3 pixels per module. Each block is uniform, so taking
+// one pixel per block is exact - and lets the code print noticeably bigger.
+function reduceToModules(codeCanvas, N){
+  const f = (N && codeCanvas.width % N === 0) ? codeCanvas.width / N : 1;
+  if(f <= 1) return codeCanvas;
+  const out=document.createElement("canvas");
+  out.width=out.height=N;
+  const octx=out.getContext("2d");
+  octx.imageSmoothingEnabled=false;
+  octx.drawImage(codeCanvas, 0,0, codeCanvas.width, codeCanvas.height, 0,0, N, N);
+  return out;
+}
+
 // Turn the clean embedded image into an exact module grid.
 function modulesFromCleanImage(cvs, res){
   const N = (res.version||0)*4 + 17;
@@ -746,6 +783,25 @@ function drawReceipt(p){
     if(!p.qr){
       line("[ QR NOT READABLE ]",22,true,true);
       line("Carry the original PDF for scanning",17,false,true);
+    } else if(p.qr.exact){
+      // The QR exactly as the department drew it, enlarged by a whole number
+      // of printer dots (nearest-neighbour, so no pixel is ever blurred).
+      const src=p.qr.exact;
+      const k=Math.max(1, Math.floor((W-8)/src.width));
+      const size=k*src.width;
+      const x0=Math.floor((W-size)/2);
+      const topPad=Math.max(24, Math.round(size*0.10));
+      const botPad=topPad;
+      if(draw){
+        c.fillStyle="#fff"; c.fillRect(0,y,W,size+topPad+botPad);
+        c.imageSmoothingEnabled=false;
+        c.drawImage(src, x0, y+topPad, size, size);
+        c.imageSmoothingEnabled=true;
+        qrBox={x:Math.max(0,x0-topPad), y:y, w:Math.min(W,size+2*topPad), h:size+topPad+botPad};
+      }
+      y+=size+topPad+botPad;
+      qrModuleDots=Math.round(k*src.width/ (p.qr.N||1));
+    } else if(p.qr.isModule && p.qr.mods){
     } else if(p.qr.isModule && p.qr.mods){
       const N=p.qr.N, mods=p.qr.mods;
       const sc2 = p.qr.scale || (p.qr.scale = pickQrScale(mods, N, W));

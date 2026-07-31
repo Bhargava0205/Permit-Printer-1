@@ -1,5 +1,5 @@
 {
-  "version": "1.8",
+  "version": "1.9",
   "url": "https://github.com/Bhargava0205/Permit-Printer-1/releases/latest",
-  "notes": "The QR is now taken directly from the image stored inside the permit PDF, so it is an exact copy of the departments code. Adds a full-size on-screen QR for scanning without a printer."
+  "notes": "The QR is now printed as the exact pixels stored in the permit PDF, simply enlarged by a whole number of printer dots - nothing is redrawn or interpreted."
 }
