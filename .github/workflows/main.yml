@@ -22,23 +22,63 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Download offline libraries
+        run: |
+          mkdir -p app/src/main/assets/www/lib
+          cd app/src/main/assets/www/lib
+          curl -sSL -o pdf.min.js        https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js
+          curl -sSL -o pdf.worker.min.js https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js
+          curl -sSL -o jsQR.min.js       https://cdnjs.cloudflare.com/ajax/libs/jsqr/1.4.0/jsQR.min.js
+
+      - name: Restore signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | tr -d '\r\n ' | base64 -d > app/permitprint.jks
+            if keytool -list -keystore app/permitprint.jks -storepass "${{ secrets.KEYSTORE_PASSWORD }}" > /dev/null 2>&1; then
+              echo "::notice::Signing key OK - building a SIGNED release APK."
+            else
+              echo "::error::Signing key could not be opened."
+              exit 1
+            fi
+          else
+            echo "::warning::No KEYSTORE_B64 secret - unsigned debug build."
+          fi
+
       - name: Generate Gradle wrapper
         run: gradle wrapper --gradle-version 8.7
 
-      - name: Build debug APK
-        run: ./gradlew assembleDebug
+      - name: Build APK
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          if [ -f app/permitprint.jks ]; then
+            ./gradlew assembleRelease --stacktrace
+            cp app/build/outputs/apk/release/app-release.apk app-permit-print.apk
+          else
+            ./gradlew assembleDebug --stacktrace
+            cp app/build/outputs/apk/debug/app-debug.apk app-permit-print.apk
+          fi
+
+      - name: Show APK signature
+        run: |
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort | tail -1)
+          "$APKSIGNER" verify --print-certs app-permit-print.apk | grep -i "SHA-256 digest" || true
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: PermitPrint-APK
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: app-permit-print.apk
 
       - name: Publish APK release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
           name: Latest APK
-          files: app/build/outputs/apk/debug/app-debug.apk
+          files: app-permit-print.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
