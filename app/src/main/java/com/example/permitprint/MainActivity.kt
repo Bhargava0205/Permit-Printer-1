@@ -324,56 +324,30 @@ class MainActivity : Activity() {
             else all.filter { looksLikePrinter(it) || it.address == saved }
                     .ifEmpty { all }
 
-        val checking = AlertDialog.Builder(this)
-            .setTitle("Searching for printers")
-            .setMessage("Checking which printers are switched on\u2026")
-            .setCancelable(false)
-            .create()
-        checking.show()
-
-        Thread {
-            // Radio hygiene: discovery scanning blocks connections
-            try {
-                val manager = getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
-                manager?.adapter?.cancelDiscovery()
-            } catch (_: Exception) { }
-            // Probe ONE AT A TIME - simultaneous RFCOMM connects make
-            // switched-on printers look dead
-            val online = HashMap<String, Boolean>()
-            if (printer.isConnected && saved != null) online[saved] = true
-            for (d in candidates) {
-                if (online[d.address] == true) continue
-                online[d.address] = isReachable(d, 4000)
+        // Instant, truthful list: printers only, saved one ticked.
+        // (A live on/off check was tried and removed: slow-handshake printers
+        // show as offline even when they print fine, which misleads.)
+        val sorted = candidates.sortedByDescending { it.address == saved }
+        val labels = sorted.map {
+            val tick = if (it.address == saved) "\u2714 " else ""
+            tick + displayName(it) + "\n" + it.address
+        }.toMutableList()
+        if (!showAll) labels.add("Show all Bluetooth devices\u2026")
+        AlertDialog.Builder(this)
+            .setTitle("Select printer")
+            .setItems(labels.toTypedArray()) { _, which ->
+                if (!showAll && which == labels.size - 1) {
+                    choosePrinter(showAll = true); return@setItems
+                }
+                val d = sorted[which]
+                prefs.edit().putString("mac", d.address)
+                    .putString("name", displayName(d)).apply()
+                printer.disconnect()
+                status("Printer set: " + displayName(d), true)
+                web.evaluateJavascript("if(window.refreshPrinterName)refreshPrinterName()", null)
             }
-
-            runOnUiThread {
-                try { checking.dismiss() } catch (_: Exception) { }
-                // available printers first
-                val sorted = candidates.sortedByDescending { online[it.address] == true }
-                val labels = sorted.map {
-                    val tick = if (it.address == saved) "\u2714 " else ""
-                    val state = if (online[it.address] == true) "\u25CF available"
-                                else "\u25CB off / out of range"
-                    tick + displayName(it) + "  (" + state + ")\n" + it.address
-                }.toMutableList()
-                if (!showAll) labels.add("Show all Bluetooth devices\u2026")
-                AlertDialog.Builder(this)
-                    .setTitle("Select printer")
-                    .setItems(labels.toTypedArray()) { _, which ->
-                        if (!showAll && which == labels.size - 1) {
-                            choosePrinter(showAll = true); return@setItems
-                        }
-                        val d = sorted[which]
-                        prefs.edit().putString("mac", d.address)
-                            .putString("name", displayName(d)).apply()
-                        printer.disconnect()
-                        status("Printer set: " + displayName(d), true)
-                        web.evaluateJavascript("if(window.refreshPrinterName)refreshPrinterName()", null)
-                    }
-                    .setNegativeButton("Cancel", null)
-                    .show()
-            }
-        }.start()
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     private fun isNewer(remote: String, local: String): Boolean {
