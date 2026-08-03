@@ -75,9 +75,9 @@
 <body>
 <div id="splash">
   <div class="ring"><img src="applogo.png" alt=""></div>
-  <h2>Agricultural Market Committee</h2>
-  <p>Palamaner, Chittoor District</p>
-  <div class="foot">AMC, Palamaner<br><span id="splashVer">Version 1.3</span></div>
+  <h2>Agricultural Marketing Department</h2>
+  <p>Designed by AMC, Palamaner, Chittoor District</p>
+  <div class="foot"><span id="splashVer">Version 2.2</span></div>
 </div>
 
 <header>
@@ -128,7 +128,7 @@ The PDF on your phone remains the official permit.</footer>
 <div id="verTag" style="position:fixed;left:12px;bottom:10px;font-size:11px;
   color:#8b887f;line-height:1.35;pointer-events:none;background:var(--paper);
   padding:4px 8px 4px 0;border-radius:6px;z-index:5">
-  AMC, Palamaner<br><span id="verNum">Version 1.3</span></div>
+  <span id="verNum">Version 2.2</span></div>
 
 <script>
 // Local worker when bundled, internet copy otherwise
@@ -282,7 +282,8 @@ async function handlePdf(file){
             holder.mods=g.mods; holder.N=g.N; holder.fromPdfImage=true;
             // the department's own pixels, cropped to the code itself
             const cropped = cropCodeFromImage(emb.canvas);
-            holder.exact = cropped ? reduceToModules(cropped, g.N) : null;
+            holder.exact = cropped ? reduceToModules(cropped, g.N) : emb.canvas;
+            holder.exactFull = emb.canvas;
             q = {canvas:holder, data:emb.result.data};
           }
         }
@@ -784,23 +785,24 @@ function drawReceipt(p){
       line("[ QR NOT READABLE ]",22,true,true);
       line("Carry the original PDF for scanning",17,false,true);
     } else if(p.qr.exact){
-      // The QR exactly as the department drew it, enlarged by a whole number
-      // of printer dots (nearest-neighbour, so no pixel is ever blurred).
-      const src=p.qr.exact;
-      const k=Math.max(1, Math.floor((W-8)/src.width));
-      const size=k*src.width;
-      const x0=Math.floor((W-size)/2);
-      const topPad=Math.max(24, Math.round(size*0.10));
-      const botPad=topPad;
+      // EXACT REPLICA, ENLARGED BY A WHOLE NUMBER: the image object from the
+      // PDF with every pixel drawn as an identical k x k block of printer
+      // dots. The code is unchanged - only physically larger, which is what
+      // thermal paper needs to be scannable.
+      const src = p.qr.exact;
+      const k = Math.max(1, Math.floor((W - 8) / src.width));
+      const size = k * src.width;
+      const x0 = Math.max(0, Math.floor((W - size) / 2));
+      const pad = Math.max(24, 4*k);               // >= 4 modules of white
       if(draw){
-        c.fillStyle="#fff"; c.fillRect(0,y,W,size+topPad+botPad);
-        c.imageSmoothingEnabled=false;
-        c.drawImage(src, x0, y+topPad, size, size);
-        c.imageSmoothingEnabled=true;
-        qrBox={x:Math.max(0,x0-topPad), y:y, w:Math.min(W,size+2*topPad), h:size+topPad+botPad};
+        c.fillStyle = "#fff";
+        c.fillRect(0, y, W, size + 2*pad);
+        c.imageSmoothingEnabled = false;
+        c.drawImage(src, x0, y + pad, size, size);   // integer upscale
+        c.imageSmoothingEnabled = true;
+        qrBox = {x:x0, y:y+pad, w:size, h:size};
       }
-      y+=size+topPad+botPad;
-      qrModuleDots=Math.round(k*src.width/ (p.qr.N||1));
+      y += size + 2*pad;
     } else if(p.qr.isModule && p.qr.mods){
     } else if(p.qr.isModule && p.qr.mods){
       const N=p.qr.N, mods=p.qr.mods;
