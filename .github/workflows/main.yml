@@ -13,6 +13,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Compute version
+        id: ver
+        run: |
+          RUN=${{ github.run_number }}
+          MAJOR=$(( RUN / 10 + 1 ))
+          MINOR=$(( RUN % 10 ))
+          VERSION="$MAJOR.$MINOR"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "code=$RUN" >> "$GITHUB_OUTPUT"
+          echo "Building version $VERSION (versionCode $RUN)"
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -55,11 +66,12 @@ jobs:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
+          ARGS="-PappVersion=${{ steps.ver.outputs.version }} -PappCode=${{ steps.ver.outputs.code }}"
           if [ -f app/permitprint.jks ]; then
-            ./gradlew assembleRelease --stacktrace
+            ./gradlew assembleRelease $ARGS --stacktrace
             cp app/build/outputs/apk/release/app-release.apk app-permit-print.apk
           else
-            ./gradlew assembleDebug --stacktrace
+            ./gradlew assembleDebug $ARGS --stacktrace
             cp app/build/outputs/apk/debug/app-debug.apk app-permit-print.apk
           fi
 
@@ -77,8 +89,8 @@ jobs:
       - name: Publish APK release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: latest
-          name: Latest APK
+          tag_name: v${{ steps.ver.outputs.version }}
+          name: Version ${{ steps.ver.outputs.version }}
           files: app-permit-print.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
