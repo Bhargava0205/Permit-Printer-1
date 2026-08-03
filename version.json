@@ -1,5 +1,5 @@
 {
-  "version": "2.2",
+  "version": "2.3",
   "url": "https://github.com/Bhargava0205/Permit-Printer-1/releases/latest",
-  "notes": "The QR prints as an exact replica of the permit code, enlarged pixel-for-pixel to a scannable size (about 45mm). New opening screen for the Agricultural Marketing Department."
+  "notes": "Opening screen restored to Agricultural Market Committee, Palamaner. Scannable enlarged exact QR."
 }
