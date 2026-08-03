@@ -3,8 +3,9 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
-// The signing key is provided by the build workflow (decoded from a GitHub
-// secret). If it is missing, the build still works and produces a debug APK.
+val appVersion: String = (project.findProperty("appVersion") as String?) ?: "0.0"
+val appCode: Int = ((project.findProperty("appCode") as String?) ?: "1").toInt()
+
 val keystoreFile = rootProject.file("app/permitprint.jks")
 val hasKeystore = keystoreFile.exists()
 
@@ -16,17 +17,17 @@ android {
         applicationId = "com.example.permitprint"
         minSdk = 24
         targetSdk = 34
-        versionCode = 24
-        versionName = "2.4"
+        versionCode = appCode
+        versionName = appVersion
     }
 
     signingConfigs {
         if (hasKeystore) {
             create("release") {
                 storeFile = keystoreFile
-                storePassword = System.getenv("KEYSTORE_PASSWORD") ?: "amcpalamaner"
-                keyAlias = System.getenv("KEY_ALIAS") ?: "permitprint"
-                keyPassword = System.getenv("KEY_PASSWORD") ?: "amcpalamaner"
+                storePassword = System.getenv("KEYSTORE_PASSWORD") ?: ""
+                keyAlias = System.getenv("KEY_ALIAS") ?: ""
+                keyPassword = System.getenv("KEY_PASSWORD") ?: ""
             }
         }
     }
