@@ -22,15 +22,22 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 
+/**
+ * Single-screen app: the verified permit engine runs in a WebView (assets/www),
+ * printing goes out over Bluetooth ESC/POS from Kotlin.
+ * Uses only the Android platform - no external libraries - so it always builds.
+ */
 class MainActivity : Activity() {
 
     companion object {
+        /** Latest-release info straight from GitHub - no file to edit. */
         const val RELEASES_API =
             "https://api.github.com/repos/Bhargava0205/Permit-Printer-1/releases/latest"
         const val RELEASES_PAGE =
             "https://github.com/Bhargava0205/Permit-Printer-1/releases/latest"
     }
 
+    /** The version baked in by the build - never edited by hand. */
     private val appVersion: String by lazy {
         try { packageManager.getPackageInfo(packageName, 0).versionName ?: "0.0" }
         catch (e: Exception) { "0.0" }
@@ -71,6 +78,8 @@ class MainActivity : Activity() {
         handleIncoming(intent)
     }
 
+    // ---------------- shared permits (WhatsApp / Files) ----------------
+
     private fun handleIncoming(intent: Intent?) {
         val uri: Uri? = when (intent?.action) {
             Intent.ACTION_SEND ->
@@ -108,17 +117,21 @@ class MainActivity : Activity() {
         }.start()
     }
 
+    // ---------------- printing bridge ----------------
+
     inner class Bridge {
+        /** Opens the printer chooser from the app's Printer button. */
         @JavascriptInterface
         fun selectPrinter() { runOnUiThread { choosePrinter() } }
 
+        /** Name of the currently saved printer (shown on the button). */
         @JavascriptInterface
         fun savedPrinterName(): String {
             val mac = prefs.getString("mac", null) ?: return ""
             return try {
                 val d = bondedDevices().firstOrNull { it.address == mac }
                 if (d != null) {
-                    val fresh = displayName(d)
+                    val fresh = displayName(d)          // reflects Bluetooth renames
                     prefs.edit().putString("name", fresh).apply()
                     fresh
                 } else prefs.getString("name", "") ?: ""
@@ -128,6 +141,7 @@ class MainActivity : Activity() {
         @JavascriptInterface
         fun appVersion(): String = this@MainActivity.appVersion
 
+        /** Project facts for the hidden info screen (long-press the version). */
         @JavascriptInterface
         fun projectInfo(): String =
             "AMC PERMIT PRINT - PROJECT INFORMATION\n" +
@@ -135,8 +149,8 @@ class MainActivity : Activity() {
             "Repository:\n  github.com/Bhargava0205/Permit-Printer-1\n\n" +
             "APK link (always newest):\n  github.com/Bhargava0205/Permit-Printer-1/releases/latest/download/app-permit-print.apk\n\n" +
             "How a release happens:\n  Any push to the repo builds automatically.\n  Version = build number (run 15 = v2.5, run 16 = v2.6...).\n  Nothing to edit for versioning.\n\n" +
-            "Signing (needed for updates to install):\n  4 GitHub secrets: KEYSTORE_B64, KEYSTORE_PASSWORD,\n  KEY_ALIAS, KEY_PASSWORD.\n  Key file backup kept privately by the developer.\n\n" +
-            "If everything is lost:\n  Give the project handover zip to Claude (claude.ai)\n  and say: restore the AMC Permit Print project.\n\n" +
+            "Signing (needed for updates to install):\n  4 GitHub secrets: KEYSTORE_B64, KEYSTORE_PASSWORD,\n  KEY_ALIAS, KEY_PASSWORD.\n  Key file backup: PROJECT_VAULT.zip (kept privately\n  by the developer - NOT in this app or the repo).\n\n" +
+            "If everything is lost:\n  Give the PROJECT_VAULT.zip to Claude (claude.ai)\n  and say: restore the AMC Permit Print project.\n  It contains the full source, keys and instructions.\n\n" +
             "Developed for AMC, Palamaner, Chittoor District."
 
         @JavascriptInterface
@@ -164,6 +178,7 @@ class MainActivity : Activity() {
             }.start()
         }
 
+        /** Fallback used if the page calls print() without a paper width. */
         @JavascriptInterface
         fun print(dataUrl: String) = print(dataUrl, EscPosPrinter.WIDTH_58MM)
 
@@ -179,7 +194,7 @@ class MainActivity : Activity() {
             }
             Thread {
                 try {
-                    printer.disconnect()
+                    printer.disconnect()          // always start from a clean link
                     Thread.sleep(150)
                     connectSaved()
                     printer.printBitmap(bmp, widthDots)
@@ -196,6 +211,7 @@ class MainActivity : Activity() {
         }
     }
 
+    /** The name the user sees in Android Bluetooth settings (rename-aware). */
     @SuppressLint("MissingPermission")
     private fun displayName(d: BluetoothDevice): String {
         try {
@@ -240,16 +256,49 @@ class MainActivity : Activity() {
         prefs.edit().putString("mac", device.address).apply()
     }
 
+    /** True for devices that look like printers (class or name). */
     @SuppressLint("MissingPermission")
-    private fun choosePrinter() {
+    private fun looksLikePrinter(d: BluetoothDevice): Boolean {
+        try {
+            val major = d.bluetoothClass?.majorDeviceClass ?: -1
+            if (major == android.bluetooth.BluetoothClass.Device.Major.IMAGING) return true
+        } catch (_: Exception) { }
+        val n = (displayName(d) + " " + (d.name ?: "")).uppercase()
+        for (k in listOf("PRINT", "POS", "THERMAL", "RECEIPT", "58", "80",
+                         "MTP", "RPP", "PTP", "GOOJPRT", "PERIPAGE", "CP"))
+            if (n.contains(k)) return true
+        return false
+    }
+
+    /** Quick reachability probe: can we open a socket right now? */
+    @SuppressLint("MissingPermission")
+    private fun isReachable(d: BluetoothDevice, timeoutMs: Long): Boolean {
+        var ok = false
+        var socket: android.bluetooth.BluetoothSocket? = null
+        val t = Thread {
+            try {
+                socket = d.createInsecureRfcommSocketToServiceRecord(
+                    java.util.UUID.fromString("00001101-0000-1000-8000-00805F9B34FB"))
+                socket?.connect()
+                ok = true
+            } catch (_: Exception) { }
+        }
+        t.start()
+        t.join(timeoutMs)
+        try { socket?.close() } catch (_: Exception) { }
+        return ok
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun choosePrinter(showAll: Boolean = false) {
         if (!hasBtPermission()) { requestBtPermissions(); return }
-        val devices = try { bondedDevices() } catch (e: Exception) {
+        val all = try { bondedDevices() } catch (e: Exception) {
             AlertDialog.Builder(this).setTitle("Printer")
                 .setMessage(e.message ?: "Bluetooth problem")
                 .setPositiveButton("OK", null).show()
             return
         }
-        if (devices.isEmpty()) {
+        if (all.isEmpty()) {
             AlertDialog.Builder(this).setTitle("No paired printers")
                 .setMessage("Pair the thermal printer in Android Settings > Bluetooth first " +
                             "(PIN 0000 or 1234), then open this list again.")
@@ -261,22 +310,54 @@ class MainActivity : Activity() {
             return
         }
         val saved = prefs.getString("mac", null)
-        val labels = devices.map {
-            val tick = if (it.address == saved) "\u2714  " else ""
-            tick + displayName(it) + "\n" + it.address
-        }.toTypedArray()
-        AlertDialog.Builder(this)
-            .setTitle("Select printer")
-            .setItems(labels) { _, which ->
-                val d = devices[which]
-                prefs.edit().putString("mac", d.address)
-                    .putString("name", displayName(d)).apply()
-                printer.disconnect()
-                status("Printer set: " + displayName(d), true)
-                web.evaluateJavascript("if(window.refreshPrinterName)refreshPrinterName()", null)
+        val candidates =
+            if (showAll) all
+            else all.filter { looksLikePrinter(it) || it.address == saved }
+                    .ifEmpty { all }
+
+        val checking = AlertDialog.Builder(this)
+            .setTitle("Searching for printers")
+            .setMessage("Checking which printers are switched on\u2026")
+            .setCancelable(false)
+            .create()
+        checking.show()
+
+        Thread {
+            // probe all candidates in parallel (about 3 seconds total)
+            val online = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+            val threads = candidates.map { d ->
+                Thread { online[d.address] = isReachable(d, 3000) }.also { it.start() }
             }
-            .setNegativeButton("Cancel", null)
-            .show()
+            threads.forEach { it.join(3500) }
+
+            runOnUiThread {
+                try { checking.dismiss() } catch (_: Exception) { }
+                // available printers first
+                val sorted = candidates.sortedByDescending { online[it.address] == true }
+                val labels = sorted.map {
+                    val tick = if (it.address == saved) "\u2714 " else ""
+                    val state = if (online[it.address] == true) "\u25CF available"
+                                else "\u25CB off / out of range"
+                    tick + displayName(it) + "  (" + state + ")\n" + it.address
+                }.toMutableList()
+                if (!showAll) labels.add("Show all Bluetooth devices\u2026")
+                AlertDialog.Builder(this)
+                    .setTitle("Select printer")
+                    .setItems(labels.toTypedArray()) { _, which ->
+                        if (!showAll && which == labels.size - 1) {
+                            choosePrinter(showAll = true); return@setItems
+                        }
+                        val d = sorted[which]
+                        prefs.edit().putString("mac", d.address)
+                            .putString("name", displayName(d)).apply()
+                        printer.disconnect()
+                        status("Printer set: " + displayName(d), true)
+                        web.evaluateJavascript("if(window.refreshPrinterName)refreshPrinterName()", null)
+                    }
+                    .setNegativeButton("Cancel", null)
+                    .show()
+            }
+        }.start()
     }
 
     private fun isNewer(remote: String, local: String): Boolean {
@@ -290,6 +371,7 @@ class MainActivity : Activity() {
         return false
     }
 
+    /** Checks version.json on GitHub; offers to install a newer APK. */
     private fun checkForUpdate(manual: Boolean) {
         Thread {
             try {
