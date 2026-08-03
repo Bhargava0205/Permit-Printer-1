@@ -22,19 +22,18 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 
-/**
- * Single-screen app: the verified permit engine runs in a WebView (assets/www),
- * printing goes out over Bluetooth ESC/POS from Kotlin.
- * Uses only the Android platform - no external libraries - so it always builds.
- */
 class MainActivity : Activity() {
 
     companion object {
-        /** Shown in the app and compared against version.json for updates. */
-        const val APP_VERSION = "2.4"
-        /** Edit version.json in the repo to publish an update to every phone. */
-        const val VERSION_URL =
-            "https://raw.githubusercontent.com/Bhargava0205/Permit-Printer-1/main/version.json"
+        const val RELEASES_API =
+            "https://api.github.com/repos/Bhargava0205/Permit-Printer-1/releases/latest"
+        const val RELEASES_PAGE =
+            "https://github.com/Bhargava0205/Permit-Printer-1/releases/latest"
+    }
+
+    private val appVersion: String by lazy {
+        try { packageManager.getPackageInfo(packageName, 0).versionName ?: "0.0" }
+        catch (e: Exception) { "0.0" }
     }
 
     private lateinit var web: WebView
@@ -71,8 +70,6 @@ class MainActivity : Activity() {
         super.onNewIntent(intent)
         handleIncoming(intent)
     }
-
-    // ---------------- shared permits (WhatsApp / Files) ----------------
 
     private fun handleIncoming(intent: Intent?) {
         val uri: Uri? = when (intent?.action) {
@@ -111,21 +108,17 @@ class MainActivity : Activity() {
         }.start()
     }
 
-    // ---------------- printing bridge ----------------
-
     inner class Bridge {
-        /** Opens the printer chooser from the app's Printer button. */
         @JavascriptInterface
         fun selectPrinter() { runOnUiThread { choosePrinter() } }
 
-        /** Name of the currently saved printer (shown on the button). */
         @JavascriptInterface
         fun savedPrinterName(): String {
             val mac = prefs.getString("mac", null) ?: return ""
             return try {
                 val d = bondedDevices().firstOrNull { it.address == mac }
                 if (d != null) {
-                    val fresh = displayName(d)          // reflects Bluetooth renames
+                    val fresh = displayName(d)
                     prefs.edit().putString("name", fresh).apply()
                     fresh
                 } else prefs.getString("name", "") ?: ""
@@ -133,7 +126,18 @@ class MainActivity : Activity() {
         }
 
         @JavascriptInterface
-        fun appVersion(): String = APP_VERSION
+        fun appVersion(): String = this@MainActivity.appVersion
+
+        @JavascriptInterface
+        fun projectInfo(): String =
+            "AMC PERMIT PRINT - PROJECT INFORMATION\n" +
+            "======================================\n\n" +
+            "Repository:\n  github.com/Bhargava0205/Permit-Printer-1\n\n" +
+            "APK link (always newest):\n  github.com/Bhargava0205/Permit-Printer-1/releases/latest/download/app-permit-print.apk\n\n" +
+            "How a release happens:\n  Any push to the repo builds automatically.\n  Version = build number (run 15 = v2.5, run 16 = v2.6...).\n  Nothing to edit for versioning.\n\n" +
+            "Signing (needed for updates to install):\n  4 GitHub secrets: KEYSTORE_B64, KEYSTORE_PASSWORD,\n  KEY_ALIAS, KEY_PASSWORD.\n  Key file backup kept privately by the developer.\n\n" +
+            "If everything is lost:\n  Give the project handover zip to Claude (claude.ai)\n  and say: restore the AMC Permit Print project.\n\n" +
+            "Developed for AMC, Palamaner, Chittoor District."
 
         @JavascriptInterface
         fun checkUpdateNow() { checkForUpdate(true) }
@@ -160,7 +164,6 @@ class MainActivity : Activity() {
             }.start()
         }
 
-        /** Fallback used if the page calls print() without a paper width. */
         @JavascriptInterface
         fun print(dataUrl: String) = print(dataUrl, EscPosPrinter.WIDTH_58MM)
 
@@ -176,7 +179,7 @@ class MainActivity : Activity() {
             }
             Thread {
                 try {
-                    printer.disconnect()          // always start from a clean link
+                    printer.disconnect()
                     Thread.sleep(150)
                     connectSaved()
                     printer.printBitmap(bmp, widthDots)
@@ -193,7 +196,6 @@ class MainActivity : Activity() {
         }
     }
 
-    /** The name the user sees in Android Bluetooth settings (rename-aware). */
     @SuppressLint("MissingPermission")
     private fun displayName(d: BluetoothDevice): String {
         try {
@@ -259,7 +261,6 @@ class MainActivity : Activity() {
             return
         }
         val saved = prefs.getString("mac", null)
-        // Fresh names straight from the phone, so renamed/identical models differ
         val labels = devices.map {
             val tick = if (it.address == saved) "\u2714  " else ""
             tick + displayName(it) + "\n" + it.address
@@ -278,7 +279,6 @@ class MainActivity : Activity() {
             .show()
     }
 
-    /** true when remote version (e.g. 1.6) is higher than the installed one. */
     private fun isNewer(remote: String, local: String): Boolean {
         fun parts(v: String) = v.trim().split(".").map { it.filter { c -> c.isDigit() } }
             .map { if (it.isEmpty()) 0 else it.toInt() }
@@ -290,24 +290,29 @@ class MainActivity : Activity() {
         return false
     }
 
-    /** Checks version.json on GitHub; offers to install a newer APK. */
     private fun checkForUpdate(manual: Boolean) {
         Thread {
             try {
-                val conn = URL(VERSION_URL).openConnection() as HttpURLConnection
+                val conn = URL(RELEASES_API).openConnection() as HttpURLConnection
                 conn.connectTimeout = 8000; conn.readTimeout = 8000
-                conn.setRequestProperty("Cache-Control", "no-cache")
+                conn.setRequestProperty("Accept", "application/vnd.github+json")
                 val body = conn.inputStream.bufferedReader().use { it.readText() }
                 conn.disconnect()
                 val j = JSONObject(body)
-                val latest = j.optString("version", "")
-                val url = j.optString("url", "")
-                val notes = j.optString("notes", "")
+                val latest = j.optString("tag_name", "").removePrefix("v")
+                var url = RELEASES_PAGE
+                val assets = j.optJSONArray("assets")
+                if (assets != null) for (i in 0 until assets.length()) {
+                    val a = assets.getJSONObject(i)
+                    if (a.optString("name") == "app-permit-print.apk")
+                        url = a.optString("browser_download_url", url)
+                }
+                val notes = j.optString("body", "")
                 runOnUiThread {
-                    if (latest.isNotEmpty() && url.isNotEmpty() && isNewer(latest, APP_VERSION)) {
+                    if (latest.isNotEmpty() && url.isNotEmpty() && isNewer(latest, appVersion)) {
                         AlertDialog.Builder(this)
                             .setTitle("Update available: " + latest)
-                            .setMessage("You have " + APP_VERSION + ".\n\n" +
+                            .setMessage("You have " + appVersion + ".\n\n" +
                                         (if (notes.isEmpty()) "A newer version is ready."
                                          else notes))
                             .setPositiveButton("Update now") { _, _ ->
@@ -317,7 +322,7 @@ class MainActivity : Activity() {
                             .setNegativeButton("Later", null)
                             .show()
                     } else if (manual) {
-                        status("You are on the latest version (" + APP_VERSION + ").", true)
+                        status("You are on the latest version (" + appVersion + ").", true)
                     }
                 }
             } catch (e: Exception) {
