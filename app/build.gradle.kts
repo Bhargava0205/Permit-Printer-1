@@ -3,6 +3,8 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+// Version comes from the build system (GitHub run number). Local builds fall
+// back to 0.0/1 - releases are only ever made by the workflow.
 val appVersion: String = (project.findProperty("appVersion") as String?) ?: "0.0"
 val appCode: Int = ((project.findProperty("appCode") as String?) ?: "1").toInt()
 

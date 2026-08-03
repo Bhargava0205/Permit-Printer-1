@@ -273,14 +273,23 @@ class MainActivity : Activity() {
     /** Quick reachability probe: can we open a socket right now? */
     @SuppressLint("MissingPermission")
     private fun isReachable(d: BluetoothDevice, timeoutMs: Long): Boolean {
+        val uuid = java.util.UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
         var ok = false
         var socket: android.bluetooth.BluetoothSocket? = null
         val t = Thread {
+            // same fallback ladder the real print connection uses
             try {
-                socket = d.createInsecureRfcommSocketToServiceRecord(
-                    java.util.UUID.fromString("00001101-0000-1000-8000-00805F9B34FB"))
-                socket?.connect()
-                ok = true
+                socket = d.createRfcommSocketToServiceRecord(uuid)
+                socket?.connect(); ok = true; return@Thread
+            } catch (_: Exception) { try { socket?.close() } catch (_: Exception) {} }
+            try {
+                socket = d.createInsecureRfcommSocketToServiceRecord(uuid)
+                socket?.connect(); ok = true; return@Thread
+            } catch (_: Exception) { try { socket?.close() } catch (_: Exception) {} }
+            try {
+                val m = d.javaClass.getMethod("createRfcommSocket", Int::class.javaPrimitiveType)
+                socket = m.invoke(d, 1) as android.bluetooth.BluetoothSocket
+                socket?.connect(); ok = true
             } catch (_: Exception) { }
         }
         t.start()
@@ -323,12 +332,19 @@ class MainActivity : Activity() {
         checking.show()
 
         Thread {
-            // probe all candidates in parallel (about 3 seconds total)
-            val online = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
-            val threads = candidates.map { d ->
-                Thread { online[d.address] = isReachable(d, 3000) }.also { it.start() }
+            // Radio hygiene: discovery scanning blocks connections
+            try {
+                val manager = getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+                manager?.adapter?.cancelDiscovery()
+            } catch (_: Exception) { }
+            // Probe ONE AT A TIME - simultaneous RFCOMM connects make
+            // switched-on printers look dead
+            val online = HashMap<String, Boolean>()
+            if (printer.isConnected && saved != null) online[saved] = true
+            for (d in candidates) {
+                if (online[d.address] == true) continue
+                online[d.address] = isReachable(d, 4000)
             }
-            threads.forEach { it.join(3500) }
 
             runOnUiThread {
                 try { checking.dismiss() } catch (_: Exception) { }

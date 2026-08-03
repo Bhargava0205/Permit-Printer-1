@@ -77,7 +77,7 @@
   <div class="ring"><img src="applogo.png" alt=""></div>
   <h2>Agricultural Market Committee</h2>
   <p>Palamaner, Chittoor District</p>
-  <div class="foot"><span id="splashVer">Version 2.3</span></div>
+  <div class="foot"><span id="splashVer"></span></div>
 </div>
 
 <header>
@@ -126,9 +126,16 @@
 <footer>Prints a convenience copy with the original scannable QR.
 The PDF on your phone remains the official permit.</footer>
 <div id="verTag" style="position:fixed;left:12px;bottom:10px;font-size:11px;
-  color:#8b887f;line-height:1.35;pointer-events:none;background:var(--paper);
+  color:#8b887f;line-height:1.35;background:var(--paper);
   padding:4px 8px 4px 0;border-radius:6px;z-index:5">
-  <span id="verNum">Version 2.3</span></div>
+  <span id="verNum">Version</span></div>
+<div id="infoModal" style="display:none;position:fixed;inset:0;background:#fff;z-index:9997;
+  padding:22px 18px;overflow:auto">
+  <pre id="infoText" style="white-space:pre-wrap;font-size:13px;line-height:1.5;
+    font-family:ui-monospace,Menlo,monospace;color:#1c1c1c"></pre>
+  <button id="infoClose" style="margin-top:14px;padding:12px 22px;border-radius:10px;border:none;
+    background:#1b6b3a;color:#fff;font-size:15px;font-weight:700">Close</button>
+</div>
 
 <script>
 // Local worker when bundled, internet copy otherwise
@@ -177,6 +184,20 @@ if (window.AndroidPrinter) {
   }catch(e){}
   refreshPrinterName();
   document.addEventListener("visibilitychange", ()=>{ if(!document.hidden) refreshPrinterName(); });
+
+  // hidden project-info screen: press and hold the version for 5 seconds
+  let holdTimer=null;
+  const vt=$("verTag");
+  const startHold=()=>{ holdTimer=setTimeout(()=>{
+      try{ $("infoText").textContent = AndroidPrinter.projectInfo(); }catch(e){ return; }
+      $("infoModal").style.display="block";
+    }, 5000); };
+  const cancelHold=()=>{ if(holdTimer){ clearTimeout(holdTimer); holdTimer=null; } };
+  vt.addEventListener("touchstart", startHold);
+  vt.addEventListener("mousedown", startHold);
+  for(const ev of ["touchend","touchcancel","mouseup","mouseleave"])
+    vt.addEventListener(ev, cancelHold);
+  $("infoClose").onclick=()=>{ $("infoModal").style.display="none"; };
 }
 
 let paperDots = (localStorage.getItem("paperDots")|0) || 384;
@@ -322,18 +343,16 @@ async function handlePdf(file){
     $("bigQrBtn").style.display = (q && q.canvas.isModule) ? "block" : "none";
     if(window.AndroidPrinter){ const sb=$("shareBtn"); if(sb) sb.style.display="none"; }
     const badge = isCheckpost ? "CHECK POST" : "MARKET YARD";
+    // The receipt's own QR has just been scanned in-app (jsQR over the
+    // exact pixels that will print). Report that result plainly.
     let note = "";
     const printed = $("receipt").qrPrintOk;
     const sameData = q && q.data && $("receipt").qrPrintData === q.data;
     if(!q) note = " \u26A0 QR not found \u2014 printed without QR.";
-    else if(printed && sameData)
-      note = q.canvas.fromPdfImage ? " QR verified \u2714 (exact copy)" : " QR verified \u2714";
-    else if(printed) note = " QR readable \u2714";
-    else if(printed === false) note = " \u26A0 QR may not scan \u2014 try the 80mm setting.";
-    const dots = $("receipt").qrModuleDots;
-    if(printed && dots && dots <= 6 && paperDotsIsNarrow())
-      note += " (dense code \u2014 80mm paper scans more reliably)";
-    else note = q.canvas.verified ? " QR verified \u2714" : " \u26A0 Test scan the printout.";
+    else if(printed === true && sameData) note = " QR scanned in-app \u2714 data exact.";
+    else if(printed === true) note = " QR scanned in-app \u2714";
+    else if(printed === false) note = " \u26A0 QR did NOT scan in-app \u2014 reload the permit or use 80mm.";
+    else note = " (QR self-check unavailable \u2014 needs internet once to load the scanner)";
     let msg = `<span class="badge">${badge}</span>Permit ${p.permitNo} \u2014 ${p.partyName}.${note}`;
     if(p.items.length>1) msg += ` (${p.items.length} commodities \u2014 please verify amounts)`;
     if(ocrUsed) msg += " Details read from photo (OCR) \u2014 verify.";
@@ -834,6 +853,7 @@ function drawReceipt(p){
         c.imageSmoothingEnabled=false;
         c.drawImage(p.qr,M,y,CW,qrH);
         c.imageSmoothingEnabled=true;
+        qrBox={x:M,y:y,w:CW,h:qrH};
       }
       y+=qrH;
     }
