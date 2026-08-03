@@ -31,7 +31,7 @@ class MainActivity : Activity() {
 
     companion object {
         /** Shown in the app and compared against version.json for updates. */
-        const val APP_VERSION = "2.3"
+        const val APP_VERSION = "2.4"
         /** Edit version.json in the repo to publish an update to every phone. */
         const val VERSION_URL =
             "https://raw.githubusercontent.com/Bhargava0205/Permit-Printer-1/main/version.json"
