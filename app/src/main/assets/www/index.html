@@ -823,7 +823,6 @@ function drawReceipt(p){
       }
       y += size + 2*pad;
     } else if(p.qr.isModule && p.qr.mods){
-    } else if(p.qr.isModule && p.qr.mods){
       const N=p.qr.N, mods=p.qr.mods;
       const sc2 = p.qr.scale || (p.qr.scale = pickQrScale(mods, N, W));
       const k=sc2.k, qz=sc2.qz;
